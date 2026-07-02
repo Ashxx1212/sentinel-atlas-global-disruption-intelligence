@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchLiveUsgsIntelligence } from '../lib/liveUsgsIncidents';
 import type { LiveUsgsFetchResult } from '../types/liveIntelligence';
 
@@ -12,15 +12,39 @@ const initialState: LiveUsgsFetchResult = {
 
 export function useLiveUsgsIncidents() {
   const [result, setResult] = useState<LiveUsgsFetchResult>(initialState);
+  const mountedRef = useRef(false);
+  const requestPendingRef = useRef(false);
+  const requestIdRef = useRef(0);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (forceRefresh = false) => {
+    if (requestPendingRef.current) {
+      return;
+    }
+
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    requestPendingRef.current = true;
+
     setResult((current) => ({ ...current, state: 'loading', errorMessage: null }));
-    const next = await fetchLiveUsgsIntelligence();
-    setResult(next);
+
+    try {
+      const next = await fetchLiveUsgsIntelligence({ forceRefresh });
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setResult(next);
+      }
+    } finally {
+      if (requestId === requestIdRef.current) {
+        requestPendingRef.current = false;
+      }
+    }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     void refresh();
+    return () => {
+      mountedRef.current = false;
+    };
   }, [refresh]);
 
   return {

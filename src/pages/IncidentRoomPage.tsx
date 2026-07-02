@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -25,6 +25,8 @@ import {
   mockWatchlist,
   mockSources,
 } from '../data/mockIncidents';
+import { buildHybridIncidentFromFixture, getHybridIncidentById } from '../lib/hybridIncidents';
+import type { HybridIncident } from '../types/hybridIntelligence';
 import type { IncidentTab, Incident, HazardType } from '../types';
 import { SeverityBadge, severityColor, severityText } from '../components/SeverityBadge';
 import { IntegrityBadge, StatusBadge } from '../components/StatusBadge';
@@ -78,7 +80,7 @@ function getSourceById(sourceId: string) {
 
 // ── Cinematic incident visual ───────────────────────────────
 
-function IncidentVisual({ incident }: { incident: Incident }) {
+function IncidentVisual({ incident }: { incident: HybridIncident }) {
   const color = severityColor(incident.severity);
   const textCls = severityText(incident.severity);
   const path = hazardIconPaths[incident.hazardType];
@@ -161,7 +163,7 @@ function IncidentVisual({ incident }: { incident: Incident }) {
 
 // ── Key facts grid ───────────────────────────────────────────
 
-function KeyFactsGrid({ incident }: { incident: Incident }) {
+function KeyFactsGrid({ incident }: { incident: HybridIncident }) {
   const source = getSourceById(incident.sourceId);
   const facts = [
     { label: 'Severity', value: incident.severity, badge: true, badgeType: 'severity' },
@@ -205,7 +207,7 @@ function KeyFactsGrid({ incident }: { incident: Incident }) {
 
 // ── Evidence ledger ──────────────────────────────────────────
 
-function EvidenceLedger({ incident }: { incident: Incident }) {
+function EvidenceLedger({ incident }: { incident: HybridIncident }) {
   return (
     <div className="space-y-3">
       {incident.evidence.map((ev) => {
@@ -256,7 +258,7 @@ function EvidenceLedger({ incident }: { incident: Incident }) {
 
 // ── Context cards ────────────────────────────────────────────
 
-function ContextCards({ incident }: { incident: Incident }) {
+function ContextCards({ incident }: { incident: HybridIncident }) {
   return (
     <div className="space-y-3">
       {incident.context.map((ctx) => (
@@ -297,10 +299,10 @@ function ContextCards({ incident }: { incident: Incident }) {
 
 // ── Right-side intelligence rail ─────────────────────────────
 
-function IntelligenceRail({ incident }: { incident: Incident }) {
-  const related = getRelatedIncidents(incident);
-  const matchingAlerts = findMatchingAlerts(incident);
-  const matchingWatchlist = findMatchingWatchlist(incident);
+function IntelligenceRail({ incident }: { incident: HybridIncident }) {
+  const related = useMemo(() => getRelatedIncidents(incident).map(buildHybridIncidentFromFixture), [incident]);
+  const matchingAlerts = useMemo(() => findMatchingAlerts(incident), [incident]);
+  const matchingWatchlist = useMemo(() => findMatchingWatchlist(incident), [incident]);
 
   return (
     <div className="space-y-4">
@@ -420,11 +422,71 @@ function IntelligenceRail({ incident }: { incident: Incident }) {
 export function IncidentRoomPage() {
   const { incidentId } = useParams<{ incidentId: string }>();
   const [activeTab, setActiveTab] = useState<IncidentTab>('overview');
+  const [incident, setIncident] = useState<HybridIncident | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const incident = useMemo(
-    () => (incidentId ? getIncidentById(incidentId) : undefined),
-    [incidentId]
+  const relatedIncidents = useMemo(
+    () => incident ? getRelatedIncidents(incident).map(buildHybridIncidentFromFixture) : [],
+    [incident],
   );
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadIncident() {
+      if (mounted) {
+        setLoading(true);
+        setLoadError(null);
+        setActiveTab('overview');
+      }
+
+      if (!incidentId) {
+        if (mounted) {
+          setIncident(undefined);
+          setLoading(false);
+        }
+        return;
+      }
+
+      const fixtureIncident = getIncidentById(incidentId);
+      if (fixtureIncident) {
+        if (mounted) {
+          setIncident(buildHybridIncidentFromFixture(fixtureIncident));
+          setLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const hybridLiveIncident = await getHybridIncidentById(incidentId);
+        if (mounted) {
+          setIncident(hybridLiveIncident);
+          setLoading(false);
+        }
+      } catch {
+        if (mounted) {
+          setIncident(undefined);
+          setLoadError('This Incident Room could not be loaded right now.');
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadIncident();
+
+    return () => {
+      mounted = false;
+    };
+  }, [incidentId]);
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
+        <div className="panel p-6 text-sm text-slate-400">Loading incident room…</div>
+      </div>
+    );
+  }
 
   if (!incident) {
     return (
@@ -440,7 +502,7 @@ export function IncidentRoomPage() {
           <EmptyState
             icon={DoorClosed}
             title="Incident Room unavailable"
-            message="This prototype incident record could not be found."
+            message={loadError ?? 'This incident record could not be found.'}
           />
           <div className="mt-4 text-center">
             <Link to="/incidents" className="btn-primary inline-flex items-center gap-2">
@@ -478,9 +540,9 @@ export function IncidentRoomPage() {
                 {hazardTypeLabels[incident.hazardType]}
               </span>
               <IntegrityBadge status={incident.integrity} size="xs" />
-              <span className="chip border-warning-500/20 bg-warning-500/5 text-warning-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-warning-500" />
-                Prototype Fixture
+              <span className={`chip ${incident.dataMode === 'live_source' ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-400' : 'border-warning-500/20 bg-warning-500/5 text-warning-400'}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${incident.dataMode === 'live_source' ? 'bg-cyan-400' : 'bg-warning-500'}`} />
+                {incident.dataMode === 'live_source' ? 'LIVE SOURCE · USGS' : 'PROTOTYPE FIXTURE'}
               </span>
             </div>
 
@@ -525,10 +587,12 @@ export function IncidentRoomPage() {
         </div>
 
         {/* Prototype disclaimer */}
-        <div className="mt-4 flex items-start gap-2 rounded-lg border border-warning-500/15 bg-warning-500/5 p-3">
-          <Info className="h-3.5 w-3.5 flex-shrink-0 text-warning-400 mt-0.5" />
+        <div className={`mt-4 flex items-start gap-2 rounded-lg border p-3 ${incident.dataMode === 'live_source' ? 'border-cyan-500/15 bg-cyan-500/5' : 'border-warning-500/15 bg-warning-500/5'}`}>
+          <Info className={`h-3.5 w-3.5 flex-shrink-0 mt-0.5 ${incident.dataMode === 'live_source' ? 'text-cyan-400' : 'text-warning-400'}`} />
           <p className="text-xs text-slate-400 leading-relaxed">
-            This Incident Room uses local prototype fixture data. It is not an official warning or live-risk assessment.
+            {incident.dataMode === 'live_source'
+              ? 'USGS source record. Sentinel Atlas has not independently validated this observation.'
+              : 'This Incident Room uses local prototype fixture data. It is not an official warning or live-risk assessment.'}
           </p>
         </div>
       </div>
@@ -601,11 +665,11 @@ export function IncidentRoomPage() {
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
                   Related Incidents
                 </h3>
-                {getRelatedIncidents(incident).length === 0 ? (
+                {relatedIncidents.length === 0 ? (
                   <p className="text-xs text-slate-500">No related incidents linked.</p>
                 ) : (
                   <div className="grid gap-3 sm:grid-cols-2">
-                    {getRelatedIncidents(incident).map((rel) => (
+                    {relatedIncidents.map((rel) => (
                       <IncidentCard key={rel.id} incident={rel} compact />
                     ))}
                   </div>

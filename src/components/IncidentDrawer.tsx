@@ -1,12 +1,13 @@
 import { Link } from 'react-router-dom';
-import { X, MapPin, Clock, ArrowRight, Info, Link2 } from 'lucide-react';
-import type { Incident } from '../types';
+import { useEffect, useMemo } from 'react';
+import { X, MapPin, Clock, ArrowRight, Info, Link2, Database, Layers3, Server } from 'lucide-react';
+import type { HybridIncident } from '../types/hybridIntelligence';
 import { SeverityBadge } from './SeverityBadge';
 import { IntegrityBadge } from './StatusBadge';
 import { hazardTypeLabels, getRelatedIncidents } from '../data/mockIncidents';
 
 interface IncidentDrawerProps {
-  incident: Incident | null;
+  incident: HybridIncident | null;
   onClose: () => void;
 }
 
@@ -23,6 +24,23 @@ function formatTimestamp(iso: string): string {
 }
 
 export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
+  const relatedIncidents = useMemo(() => incident ? getRelatedIncidents(incident) : [], [incident]);
+
+  useEffect(() => {
+    if (!incident) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [incident, onClose]);
+
   if (!incident) return null;
 
   return (
@@ -83,6 +101,33 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
               </div>
             </div>
 
+            {incident.dataMode === 'live_source' && (
+              <div className="mt-4 grid gap-3 rounded-lg border border-cyan-500/15 bg-cyan-500/5 p-3 text-xs text-slate-400">
+                <div className="flex items-center gap-2">
+                  <Database className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>Magnitude: {incident.magnitude !== null ? `${incident.magnitude.toFixed(1)} M` : 'Unavailable'}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Layers3 className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>Depth: {incident.depthKm !== null ? `${incident.depthKm.toFixed(1)} km` : 'Unavailable'}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>Event time: {incident.eventTime ? formatTimestamp(incident.eventTime) : 'Unavailable'}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Server className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>Fetch time: {incident.sourceFetchedAt ? formatTimestamp(incident.sourceFetchedAt) : 'Unavailable'}</span>
+                </div>
+                {incident.sourceRecordUrl && (
+                  <a href={incident.sourceRecordUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-cyan-300">
+                    View source URL
+                    <ArrowRight className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            )}
+
             {/* Summary */}
             <div className="mt-4">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -100,7 +145,9 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
                 <div>
                   <p className="text-xs font-medium text-slate-300">Why this is shown</p>
                   <p className="mt-0.5 text-[11px] text-slate-500 leading-relaxed">
-                    This incident appears because it matches the current map filters. Map position and incident context are illustrative in this prototype.
+                    {incident.dataMode === 'live_source'
+                      ? 'USGS source record. Sentinel Atlas has not independently validated this observation.'
+                      : 'This incident appears because it matches the current map filters. Map position and incident context are illustrative in this prototype.'}
                   </p>
                 </div>
               </div>
@@ -125,13 +172,13 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
             </div>
 
             {/* Related incidents */}
-            {getRelatedIncidents(incident).length > 0 && (
+            {relatedIncidents.length > 0 && (
               <div className="mt-4">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Related Incidents
                 </h3>
                 <div className="mt-2 space-y-1.5">
-                  {getRelatedIncidents(incident).map((rel) => (
+                  {relatedIncidents.map((rel) => (
                     <Link
                       key={rel.id}
                       to={`/incidents/${rel.id}`}
@@ -153,7 +200,9 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
             {/* Prototype note */}
             <div className="mt-4 rounded-lg border border-warning-500/15 bg-warning-500/5 p-3">
               <p className="text-[11px] text-slate-500 leading-relaxed">
-                Map position and incident context are illustrative in this prototype. No live public-source data is ingested.
+                {incident.dataMode === 'live_source'
+                  ? 'USGS positions are plotted from stored source coordinates. Map styling remains illustrative.'
+                  : 'Map position and incident context are illustrative in this prototype. No live public-source data is ingested.'}
               </p>
             </div>
           </div>

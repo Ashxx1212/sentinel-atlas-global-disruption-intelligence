@@ -10,7 +10,8 @@ import {
   Clock,
   MapPin,
 } from 'lucide-react';
-import type { Incident, HazardType } from '../types';
+import type { HazardType } from '../types';
+import type { HybridIncident } from '../types/hybridIntelligence';
 import { SeverityBadge } from './SeverityBadge';
 import { IntegrityBadge } from './StatusBadge';
 import { hazardTypeLabels } from '../data/mockIncidents';
@@ -43,7 +44,7 @@ function timeAgo(iso: string): string {
 }
 
 interface IncidentCardProps {
-  incident: Incident;
+  incident: HybridIncident;
   compact?: boolean;
 }
 
@@ -65,6 +66,9 @@ export function IncidentCard({ incident, compact = false }: IncidentCardProps) {
             <SeverityBadge severity={incident.severity} size="xs" />
             <span className="text-xs text-slate-500">
               {hazardTypeLabels[incident.hazardType]}
+            </span>
+            <span className={`chip text-[10px] ${incident.dataMode === 'live_source' ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-300' : 'border-warning-500/20 bg-warning-500/5 text-warning-400'}`}>
+              {incident.dataMode === 'live_source' ? 'LIVE SOURCE · USGS' : 'PROTOTYPE FIXTURE'}
             </span>
           </div>
           <h3 className="mt-1.5 text-sm font-semibold text-slate-100 group-hover:text-cyan-300 transition-colors">
