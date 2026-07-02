@@ -9,6 +9,10 @@ import {
   Clock,
   MapPin,
   Info,
+  RefreshCw,
+  DatabaseZap,
+  AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   mockIncidents,
@@ -25,6 +29,7 @@ import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
 import { MockMapWorkspace } from '../components/MockMapWorkspace';
 import { IncidentDrawer } from '../components/IncidentDrawer';
 import { PageHeader, PrototypeNotice, SectionHeader } from '../components/ui';
+import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
 import { useState } from 'react';
 
 function timeAgo(iso: string): string {
@@ -42,9 +47,44 @@ const severityDot: Record<string, string> = {
   advisory: 'bg-slate-500',
 };
 
+function formatTimestamp(value: string | null): string {
+  if (!value) {
+    return '—';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function statusTone(state: string): string {
+  switch (state) {
+    case 'success':
+      return 'text-success-400';
+    case 'loading':
+      return 'text-cyan-300';
+    case 'empty':
+      return 'text-slate-400';
+    case 'unconfigured':
+      return 'text-warning-400';
+    default:
+      return 'text-error-400';
+  }
+}
+
 export function CommandCentrePage() {
   const navigate = useNavigate();
   const [drawerIncident, setDrawerIncident] = useState<Incident | null>(null);
+  const { state, source, recordCount, errorMessage, refresh } = useLiveUsgsIncidents();
 
   const activeCount = mockIncidents.filter((i) => i.status === 'active').length;
   const criticalCount = mockIncidents.filter((i) => i.severity === 'critical').length;
@@ -119,6 +159,95 @@ export function CommandCentrePage() {
             trend="1 source degraded"
           />
         </button>
+      </div>
+
+      <div className="mt-6 panel ambient-sweep-bg relative overflow-hidden p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-2xl">
+            <SectionHeader title="USGS Earthquake Layer" icon={Activity} />
+            <p className="mt-2 text-sm text-slate-400 leading-relaxed">
+              Stored USGS earthquake records are surfaced here as a read-only layer inside Sentinel Atlas. The panel does not independently validate source observations.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => { void refresh(); }}
+              className="btn-secondary"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh stored layer
+            </button>
+            <Link to="/global-map" className="btn-primary">
+              <MapPin className="h-4 w-4" />
+              View Global Map
+            </Link>
+          </div>
+        </div>
+
+        {state === 'loading' ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-xl border border-ink-700/70 bg-ink-850/50 p-4">
+              <div className="h-3 w-28 rounded-full skeleton-shimmer" />
+              <div className="mt-4 space-y-3">
+                <div className="h-4 w-3/4 rounded-full skeleton-shimmer" />
+                <div className="h-4 w-2/3 rounded-full skeleton-shimmer" />
+                <div className="h-4 w-1/2 rounded-full skeleton-shimmer" />
+              </div>
+            </div>
+            <div className="rounded-xl border border-ink-700/70 bg-ink-850/50 p-4">
+              <div className="h-3 w-24 rounded-full skeleton-shimmer" />
+              <div className="mt-4 space-y-3">
+                <div className="h-10 w-full rounded-lg skeleton-shimmer" />
+                <div className="h-10 w-full rounded-lg skeleton-shimmer" />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-xl border border-ink-700/70 bg-ink-850/50 p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
+                {state === 'success' ? <CheckCircle2 className="h-4 w-4 text-success-400" /> : state === 'error' ? <AlertTriangle className="h-4 w-4 text-error-400" /> : state === 'empty' ? <DatabaseZap className="h-4 w-4 text-slate-400" /> : <AlertTriangle className="h-4 w-4 text-warning-400" />}
+                <span>{state === 'success' ? `${source?.display_name ?? 'USGS'} connected` : state === 'unconfigured' ? 'Source connection unavailable' : state === 'empty' ? 'No stored records currently available' : state === 'error' ? 'Stored layer unavailable' : 'Retrieving stored USGS source records'}</span>
+              </div>
+              <p className={`mt-3 text-sm ${statusTone(state)}`}>
+                {state === 'success' && source?.source_mode === 'live_source' && source?.ingestion_status === 'operational'
+                  ? 'Stored source records are available from the latest connected ingestion snapshot.'
+                  : state === 'success'
+                    ? 'Stored source records are available, but the current source status is not marked operational.'
+                    : state === 'empty'
+                      ? 'No active stored USGS earthquake records are currently available in Sentinel Atlas.'
+                      : state === 'unconfigured'
+                        ? 'Supabase is not configured in this browser session, so the layer remains gracefully unavailable.'
+                        : state === 'error'
+                          ? errorMessage ?? 'The stored layer could not be loaded.'
+                          : 'Retrieving the latest stored USGS source records for this view.'}
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                <span className="chip border-cyan-500/20 bg-cyan-500/10 text-cyan-300">{recordCount} active stored record{recordCount === 1 ? '' : 's'}</span>
+                <span className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">{source?.ingestion_status ? source.ingestion_status : 'status unavailable'}</span>
+              </div>
+            </div>
+            <div className="rounded-xl border border-ink-700/70 bg-ink-850/50 p-4">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Stored ingestion</p>
+              <p className="mt-2 text-sm font-medium text-slate-200">
+                {formatTimestamp(source?.last_success_at ?? null)}
+              </p>
+              <p className="mt-3 text-xs text-slate-400 leading-relaxed">
+                Source-backed records · Sentinel Atlas does not independently validate source observations.
+              </p>
+              <div className="mt-4 rounded-lg border border-ink-700/60 bg-ink-900/60 p-3 text-[11px] text-slate-500">
+                {state === 'success'
+                  ? 'Stored source records are now visible in the local dashboard layer.'
+                  : state === 'empty'
+                    ? 'No stored records are currently available for the active USGS earthquake layer.'
+                    : state === 'unconfigured'
+                      ? 'The layer remains non-breaking and read-only while configuration is missing.'
+                      : 'The live layer is temporarily unavailable while the stored data request is being retried.'}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Map + Intelligence Stream */}

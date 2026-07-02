@@ -1,8 +1,8 @@
-import { ShieldCheck, Activity, Radio, Database } from 'lucide-react';
+import { ShieldCheck, Activity, Radio, Database, RefreshCw, AlertTriangle, CheckCircle2, DatabaseZap } from 'lucide-react';
 import { mockSources } from '../data/mockIncidents';
-import { SourceHealthCard } from '../components/SourceHealthCard';
 import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
 import { PageHeader, PrototypeNotice, SectionHeader } from '../components/ui';
+import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
 
 // Ingestion health timeline data (mock)
 const timelineEvents = [
@@ -22,7 +22,60 @@ const statusConfig = {
   offline: { dot: 'bg-error-500', text: 'text-error-400' },
 };
 
+function formatTimestamp(value: string | null): string {
+  if (!value) {
+    return '—';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function PrototypeSourceCard({ source }: { source: (typeof mockSources)[number] }) {
+  return (
+    <div className="panel panel-hover p-4 transition-all duration-300">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-100">{source.shortName}</h3>
+          <p className="mt-0.5 text-xs text-slate-500">{source.name}</p>
+        </div>
+        <span className="chip border-warning-500/20 bg-warning-500/10 text-warning-300">
+          Prototype fixture · live ingestion planned
+        </span>
+      </div>
+      <p className="mt-3 text-xs text-slate-400 leading-relaxed">{source.description}</p>
+      <div className="mt-3 space-y-2 border-t border-ink-700/60 pt-3 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="text-slate-500">Coverage</span>
+          <span className="text-slate-300">{source.coverage}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-slate-500">Data role</span>
+          <span className="text-slate-300">{source.dataUseRole}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-slate-500">Last refresh</span>
+          <span className="font-mono text-cyan-300">{formatTimestamp(source.lastSync)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DataTrustPage() {
+  const { state, source, recordCount, errorMessage, refresh } = useLiveUsgsIncidents();
+  const fixtureSources = mockSources.filter((sourceItem) => sourceItem.id !== 'usgs');
+
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
@@ -49,9 +102,70 @@ export function DataTrustPage() {
       {/* Source cards */}
       <div className="mb-8">
         <SectionHeader title="Data Sources" icon={Database} />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {mockSources.map((source) => (
-            <SourceHealthCard key={source.id} source={source} />
+        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr_0.8fr_0.8fr]">
+          <div className="panel ambient-sweep-bg relative overflow-hidden p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-100">{source?.display_name ?? 'USGS'}</h3>
+                <p className="mt-0.5 text-xs text-slate-500">U.S. Geological Survey</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { void refresh(); }}
+                className="btn-ghost"
+                aria-label="Refresh stored USGS layer"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            {state === 'loading' ? (
+              <div className="mt-4 space-y-3">
+                <div className="h-3 w-2/3 rounded-full skeleton-shimmer" />
+                <div className="h-3 w-1/2 rounded-full skeleton-shimmer" />
+                <div className="h-3 w-3/4 rounded-full skeleton-shimmer" />
+              </div>
+            ) : state === 'success' ? (
+              <>
+                <div className="mt-4 flex items-center gap-2 text-sm font-medium text-slate-200">
+                  <CheckCircle2 className="h-4 w-4 text-success-400" />
+                  <span>{source?.source_mode === 'live_source' && source?.ingestion_status === 'operational' ? 'Live source connected' : 'Stored source layer available'}</span>
+                </div>
+                <p className="mt-3 text-xs text-slate-400 leading-relaxed">
+                  Latest successful ingestion: {formatTimestamp(source?.last_success_at ?? null)}
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                  <span className="chip border-cyan-500/20 bg-cyan-500/10 text-cyan-300">{recordCount} active stored records</span>
+                  <span className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">{source?.ingestion_status ?? 'status unavailable'}</span>
+                </div>
+                <p className="mt-3 text-xs text-slate-400 leading-relaxed">
+                  Source-backed records stored in Sentinel Atlas.
+                </p>
+                <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                  Sentinel Atlas does not independently validate USGS observations.
+                </p>
+              </>
+            ) : state === 'empty' ? (
+              <div className="mt-4 rounded-lg border border-ink-700/60 bg-ink-900/60 p-3 text-sm text-slate-400">
+                No active stored USGS earthquake records are currently available.
+              </div>
+            ) : state === 'unconfigured' ? (
+              <div className="mt-4 rounded-lg border border-warning-500/20 bg-warning-500/10 p-3 text-sm text-warning-300">
+                The live source layer is unavailable because Supabase configuration is missing in this browser session.
+              </div>
+            ) : (
+              <div className="mt-4 rounded-lg border border-error-500/20 bg-error-500/10 p-3 text-sm text-error-300">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span>Stored source data is temporarily unavailable.</span>
+                </div>
+                <p className="mt-2 text-xs text-error-200/90">{errorMessage ?? 'The source query failed.'}</p>
+              </div>
+            )}
+          </div>
+
+          {fixtureSources.map((sourceItem) => (
+            <PrototypeSourceCard key={sourceItem.id} source={sourceItem} />
           ))}
         </div>
       </div>
