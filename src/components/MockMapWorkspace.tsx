@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
-import type { Incident, HazardType, Severity } from '../types';
+import type { HazardType, Severity } from '../types';
+import type { HybridIncident } from '../types/hybridIntelligence';
 import { hazardTypeLabels } from '../data/mockIncidents';
 import { severityColor, severityText } from './SeverityBadge';
 
@@ -28,8 +29,8 @@ const severityRingSize: Record<Severity, string> = {
 };
 
 interface MockMapWorkspaceProps {
-  incidents: Incident[];
-  onMarkerClick?: (incident: Incident) => void;
+  incidents: HybridIncident[];
+  onMarkerClick?: (incident: HybridIncident) => void;
   selectedId?: string;
   className?: string;
   showLabels?: boolean;
@@ -45,6 +46,12 @@ export function MockMapWorkspace({
   interactive = true,
 }: MockMapWorkspaceProps) {
   const [hovered, setHovered] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (hovered && !incidents.some((incident) => incident.id === hovered)) {
+      setHovered(null);
+    }
+  }, [hovered, incidents]);
 
   return (
     <div
@@ -107,6 +114,7 @@ export function MockMapWorkspace({
           const color = severityColor(incident.severity);
           const textCls = severityText(incident.severity);
           const path = hazardIconPaths[incident.hazardType];
+          const isLiveSource = incident.dataMode === 'live_source';
 
           return (
             <button
@@ -131,12 +139,12 @@ export function MockMapWorkspace({
 
               {/* Pulse ring */}
               <span
-                className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${color} opacity-20 ${severityRingSize[incident.severity]} ${severityPulse[incident.severity]}`}
+                className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${isLiveSource ? 'bg-cyan-400/30 border border-cyan-400/40' : color + ' opacity-20'} ${severityRingSize[incident.severity]} ${severityPulse[incident.severity]}`}
               />
 
               {/* Marker dot */}
               <span
-                className={`relative flex h-4 w-4 items-center justify-center rounded-full ${color} border-2 border-ink-950 shadow-lg transition-transform duration-200 ${
+                className={`relative flex h-4 w-4 items-center justify-center rounded-full ${isLiveSource ? 'bg-cyan-400' : color} border-2 border-ink-950 shadow-lg transition-transform duration-200 ${
                   isSelected || isHovered ? 'scale-125' : 'group-hover:scale-110'
                 }`}
               >
@@ -155,9 +163,14 @@ export function MockMapWorkspace({
                     <p className="mt-0.5 text-[10px] text-slate-500">
                       {hazardTypeLabels[incident.hazardType]} · {incident.location}
                     </p>
-                    <p className="mt-1 text-[10px] text-slate-600">
-                      Fixture status · {incident.integrity}
+                    <p className={`mt-1 text-[10px] ${isLiveSource ? 'text-cyan-300' : 'text-slate-600'}`}>
+                      {isLiveSource ? 'USGS source-backed record' : `Fixture status · ${incident.integrity}`}
                     </p>
+                    {isLiveSource && incident.sourceName && (
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        {incident.sourceName} · {incident.magnitude ? `${incident.magnitude.toFixed(1)} M` : 'Magnitude unavailable'}
+                      </p>
+                    )}
                     {interactive && (
                       <span className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-cyan-400">
                         Open Incident Room

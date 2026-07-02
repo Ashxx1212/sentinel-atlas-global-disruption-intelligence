@@ -20,6 +20,8 @@ import {
   mockSources,
   hazardTypeLabels,
 } from '../data/mockIncidents';
+import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
+import { useAuth } from '../contexts/AuthContext';
 import { SeverityBadge } from './SeverityBadge';
 
 interface SearchResult {
@@ -38,11 +40,22 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const [signingOut, setSigningOut] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
   const unreadCount = mockAlerts.filter((a) => !a.read).length;
   const latestAlerts = mockAlerts.slice(0, 3);
+  const { source, recordCount, state } = useLiveUsgsIncidents();
+  const { isAuthenticated, user, profile, signOut, isConfigured } = useAuth();
+  const profileDisplayName =
+    isAuthenticated
+      ? profile?.display_name?.trim() || user?.email?.split('@')[0] || 'Signed-in analyst'
+      : 'Preview analyst';
+  const liveUsgsAvailable = state === 'success' && Boolean(source?.code) && recordCount > 0;
+  const statusLabel = liveUsgsAvailable
+    ? 'Hybrid Mode · 1 live source · 3 prototype fixtures'
+    : 'Prototype Mode · 4 simulated sources';
 
   // Build search results
   const searchResults = useMemo<SearchResult[]>(() => {
@@ -269,13 +282,20 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
       <div className="relative hidden md:block">
         <button
           onClick={() => setStatusOpen((v) => !v)}
-          aria-label="Prototype status"
+          aria-label="Hybrid data status"
           aria-expanded={statusOpen}
-          className="flex items-center gap-2 rounded-lg border border-warning-500/20 bg-warning-500/5 px-3 py-2 transition-colors hover:border-warning-500/40"
+          className={`flex items-center gap-2 rounded-lg border px-3 py-2 transition-colors ${
+            liveUsgsAvailable
+              ? 'border-cyan-500/20 bg-cyan-500/5 hover:border-cyan-500/40'
+              : 'border-warning-500/20 bg-warning-500/5 hover:border-warning-500/40'
+          }`}
         >
-          <span className="h-2 w-2 rounded-full bg-warning-500 animate-amber-pulse" />
+          <span className={`h-2 w-2 rounded-full ${liveUsgsAvailable ? 'bg-cyan-400 animate-pulse-dot' : 'bg-warning-500 animate-amber-pulse'}`} />
           <span className="text-xs text-slate-400">
-            <span className="font-medium text-warning-400">Prototype Mode</span> · 4 simulated sources
+            <span className={`font-medium ${liveUsgsAvailable ? 'text-cyan-300' : 'text-warning-400'}`}>
+              {liveUsgsAvailable ? 'Hybrid Mode' : 'Prototype Mode'}
+            </span>
+            {' · '}{statusLabel.split(' · ').slice(1).join(' · ')}
           </span>
         </button>
 
@@ -285,33 +305,38 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
             <div className="absolute right-0 top-full mt-2 z-20 w-72 animate-slide-up">
               <div className="panel p-4">
                 <div className="border-b border-ink-700/60 pb-3">
-                  <p className="text-sm font-semibold text-slate-200">Prototype Status</p>
+                  <p className="text-sm font-semibold text-slate-200">Sentinel Atlas Data Mode</p>
                   <p className="mt-1 text-xs text-slate-500 leading-relaxed">
-                    This interface uses local fixture data for demonstration.
-                    No live public-source data is currently ingested.
+                    Sentinel Atlas distinguishes stored source-backed records from local prototype fixtures.
                   </p>
                 </div>
                 <div className="mt-3 space-y-2">
-                  {mockSources.map((src) => (
-                    <div key={src.id} className="flex items-center justify-between">
+                  <div className={`rounded-lg border p-2.5 ${liveUsgsAvailable ? 'border-cyan-500/20 bg-cyan-500/5' : 'border-ink-700/60 bg-ink-850/30'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-300">USGS Earthquake Catalog</span>
+                      <span className={`text-[10px] ${liveUsgsAvailable ? 'text-cyan-300' : 'text-slate-500'}`}>
+                        {liveUsgsAvailable ? 'Live source connected' : 'Unavailable'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      {liveUsgsAvailable
+                        ? `Stored source-backed earthquake records · ${recordCount} active`
+                        : 'Live source data is not currently available.'}
+                    </p>
+                  </div>
+                  {mockSources.filter((src) => src.id !== 'usgs').map((src) => (
+                    <div key={src.id} className="flex items-center justify-between rounded-lg border border-ink-700/60 bg-ink-850/30 px-2.5 py-2">
                       <span className="text-xs text-slate-400">{src.shortName}</span>
                       <span className="flex items-center gap-1.5 text-[10px] text-slate-500">
-                        <span
-                          className={`h-1.5 w-1.5 rounded-full ${
-                            src.health === 'operational'
-                              ? 'bg-success-500'
-                              : 'bg-warning-500'
-                          }`}
-                        />
-                        {src.id === 'gdacs'
-                          ? 'Simulated degraded state'
-                          : src.id === 'openmeteo'
-                            ? 'Forecast fixture available'
-                            : 'Fixture available'}
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                        Prototype fixture
                       </span>
                     </div>
                   ))}
                 </div>
+                <p className="mt-3 text-[11px] text-slate-500 leading-relaxed">
+                  Sentinel Atlas distinguishes stored source-backed records from local prototype fixtures.
+                </p>
                 <button
                   onClick={() => {
                     navigate('/data-trust');
@@ -401,6 +426,10 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
           <div className="flex h-8 w-8 items-center justify-center rounded-full border border-cyan-500/30 bg-cyan-500/10">
             <User className="h-4 w-4 text-cyan-300" />
           </div>
+          <div className="hidden text-left sm:block">
+            <p className="text-xs font-medium text-slate-200">{profileDisplayName}</p>
+            <p className="text-[10px] text-slate-500">{isAuthenticated ? 'Signed in' : isConfigured ? 'Preview mode' : 'Auth unavailable'}</p>
+          </div>
           <ChevronDown className="hidden sm:block h-4 w-4 text-slate-500" />
         </button>
 
@@ -413,8 +442,8 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
             <div className="absolute right-0 top-full mt-2 z-20 w-56 animate-slide-up">
               <div className="panel p-2">
                 <div className="border-b border-ink-700/60 px-3 py-2">
-                  <p className="text-sm font-medium text-slate-200">Prototype Analyst</p>
-                  <p className="text-xs text-slate-500">Local prototype session</p>
+                  <p className="text-sm font-medium text-slate-200">{profileDisplayName}</p>
+                  <p className="text-xs text-slate-500">{isAuthenticated ? user?.email ?? 'Signed in' : 'Local prototype session'}</p>
                 </div>
                 <div className="mt-1 space-y-0.5">
                   <button
@@ -439,14 +468,19 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
                   </button>
                   <div className="my-1 border-t border-ink-700/60" />
                   <button
-                    onClick={() => {
-                      navigate('/');
+                    onClick={async () => {
+                      if (signingOut) return;
+                      setSigningOut(true);
+                      await signOut();
+                      setSigningOut(false);
                       setProfileOpen(false);
+                      navigate('/');
                     }}
                     className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-ink-700/40 hover:text-slate-200"
+                    disabled={signingOut}
                   >
                     <LogOut className="h-3.5 w-3.5" />
-                    Sign out
+                    {signingOut ? 'Signing out...' : isAuthenticated ? 'Sign out' : 'Return to landing'}
                   </button>
                 </div>
               </div>

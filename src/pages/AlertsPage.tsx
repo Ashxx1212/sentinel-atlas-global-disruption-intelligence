@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bell, CheckCheck, AlertOctagon, Inbox, CheckCircle2 } from 'lucide-react';
 import { mockAlerts, hazardTypeLabels } from '../data/mockIncidents';
@@ -34,13 +34,27 @@ export function AlertsPage() {
   const [alerts, setAlerts] = useState<AlertEntry[]>(mockAlerts);
   const [activeTab, setActiveTab] = useState<AlertTab>('all');
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   const navigate = useNavigate();
 
   const showToast = (message: string) => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+
     setToast(message);
-    setTimeout(() => setToast(null), 2500);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 2500);
   };
+
+  useEffect(() => () => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+  }, []);
 
   const filtered = useMemo(() => {
     switch (activeTab) {

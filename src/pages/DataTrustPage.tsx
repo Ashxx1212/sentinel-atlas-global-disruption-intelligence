@@ -1,4 +1,4 @@
-import { ShieldCheck, Activity, Radio, Database, RefreshCw, AlertTriangle, CheckCircle2, DatabaseZap } from 'lucide-react';
+import { ShieldCheck, Activity, Radio, Database, RefreshCw, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { mockSources } from '../data/mockIncidents';
 import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
 import { PageHeader, PrototypeNotice, SectionHeader } from '../components/ui';
@@ -111,11 +111,12 @@ export function DataTrustPage() {
               </div>
               <button
                 type="button"
-                onClick={() => { void refresh(); }}
+                onClick={() => { void refresh(true); }}
                 className="btn-ghost"
                 aria-label="Refresh stored USGS layer"
+                disabled={state === 'loading'}
               >
-                <RefreshCw className="h-3.5 w-3.5" />
+                <RefreshCw className={`h-3.5 w-3.5 ${state === 'loading' ? 'animate-spin' : ''}`} />
               </button>
             </div>
 

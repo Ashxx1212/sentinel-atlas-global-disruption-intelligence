@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Heart,
@@ -15,6 +15,9 @@ import {
   mockIncidents,
   hazardTypeLabels,
 } from '../data/mockIncidents';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase';
+import { fetchSavedWatchlistLocations, type PersistedWatchlistLocation } from '../lib/watchlists';
 import type { WatchlistLocation, Incident } from '../types';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { IntegrityBadge } from '../components/StatusBadge';
@@ -25,6 +28,14 @@ interface FeedItem {
   location: WatchlistLocation;
   reason: string;
   ruleIcon: typeof Ruler;
+}
+
+interface DisplayedWatchlistLocation {
+  id: string;
+  label: string;
+  sublabel: string;
+  radiusKm: number;
+  alertRules?: WatchlistLocation['alertRules'];
 }
 
 // Build a personalised feed by matching incidents to watchlist locations
@@ -55,24 +66,80 @@ function buildFeed(): FeedItem[] {
   return items;
 }
 
+const prototypeFeed = buildFeed();
+
 export function MyWorldPage() {
-  const feed = buildFeed();
+  const { isAuthenticated, user } = useAuth();
+  const [savedLocations, setSavedLocations] = useState<PersistedWatchlistLocation[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [tooltipReason, setTooltipReason] = useState<string | null>(null);
+  const [loadingLocations, setLoadingLocations] = useState(false);
+  const [locationsError, setLocationsError] = useState<string | null>(null);
+  const mountedRef = useRef(false);
 
-  const filteredFeed = selectedLocation
-    ? feed.filter((item) => item.location.id === selectedLocation)
-    : feed;
+  const loadLocations = useCallback(async () => {
+    if (!isAuthenticated || !user || !supabase) {
+      setSavedLocations([]);
+      setLocationsError(null);
+      setLoadingLocations(false);
+      return;
+    }
+
+    setLoadingLocations(true);
+    setLocationsError(null);
+    try {
+      const locations = await fetchSavedWatchlistLocations(supabase, user.id);
+      if (!mountedRef.current) return;
+      setSavedLocations(locations);
+      setSelectedLocation((current) =>
+        current && !locations.some((location) => location.id === current) ? null : current,
+      );
+    } catch {
+      if (!mountedRef.current) return;
+      setLocationsError('Could not sync your saved watchlist.');
+    } finally {
+      if (mountedRef.current) {
+        setLoadingLocations(false);
+      }
+    }
+  }, [isAuthenticated, user]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void loadLocations();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [loadLocations]);
+
+  const displayedLocations: DisplayedWatchlistLocation[] = isAuthenticated
+    ? savedLocations.map((location) => ({
+      id: location.id,
+      label: location.label,
+      sublabel: location.country_code ?? location.region_name ?? 'Saved location',
+      radiusKm: location.radius_km,
+    }))
+    : mockWatchlist.map((location) => ({
+      id: location.id,
+      label: location.name,
+      sublabel: location.country,
+      radiusKm: 500,
+      alertRules: location.alertRules,
+    }));
+
+  const filteredFeed = selectedLocation && !isAuthenticated
+    ? prototypeFeed.filter((item) => item.location.id === selectedLocation)
+    : prototypeFeed;
 
   const selectedLocationName = selectedLocation
-    ? mockWatchlist.find((loc) => loc.id === selectedLocation)?.name ?? null
+    ? displayedLocations.find((location) => location.id === selectedLocation)?.label ?? null
     : null;
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="My World"
-        subtitle="A personalised intelligence feed based on your watched locations and alert rules. Uses prototype fixture data."
+        subtitle={isAuthenticated ? 'A personalised intelligence feed grounded in your saved watchlist locations and alert context.' : 'Sign in to save and manage your watchlist locations across Sentinel Atlas.'}
       >
         <PrototypeNotice />
       </PageHeader>
@@ -88,52 +155,69 @@ export function MyWorldPage() {
               </div>
               <div>
                 <p className="text-2xl font-bold font-mono text-cyan-300">
-                  {mockWatchlist.length}
+                  {isAuthenticated ? savedLocations.length : mockWatchlist.length}
                 </p>
                 <p className="text-xs text-slate-500">Watched locations</p>
               </div>
             </div>
 
             <div className="mt-4 space-y-2 border-t border-ink-700/60 pt-4">
-              {mockWatchlist.map((loc) => (
+              {isAuthenticated && loadingLocations && savedLocations.length === 0 && (
+                <p className="rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2.5 text-sm text-slate-500">
+                  Loading saved watchlist...
+                </p>
+              )}
+              {isAuthenticated && locationsError && (
                 <button
                   type="button"
-                  key={loc.id}
-                  onClick={() =>
-                    setSelectedLocation((prev) =>
-                      prev === loc.id ? null : loc.id,
-                    )
-                  }
-                  className={`flex w-full items-center justify-between rounded-lg border p-3 cursor-pointer transition-all hover:border-ink-600 ${
-                    selectedLocation === loc.id
-                      ? 'border-cyan-500/40 bg-cyan-500/5'
-                      : 'border-ink-700/60 bg-ink-850/40'
-                  }`}
+                  onClick={() => void loadLocations()}
+                  className="w-full rounded-lg border border-error-500/20 bg-error-500/5 px-3 py-2.5 text-left text-sm text-error-300 transition-colors hover:border-error-500/40"
                 >
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-3.5 w-3.5 text-cyan-400" />
-                    <div>
-                      <p className="text-sm font-medium text-slate-200">{loc.name}</p>
-                      <p className="text-[10px] text-slate-500">{loc.country}</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-1">
-                    {loc.alertRules.map((rule) => (
-                      <span
-                        key={rule}
-                        className="rounded border border-ink-600/60 bg-ink-800/60 px-1.5 py-0.5 text-[9px] text-slate-400"
-                      >
-                        {hazardTypeLabels[rule].slice(0, 4)}
-                      </span>
-                    ))}
-                  </div>
+                  Could not sync — Retry
                 </button>
+              )}
+              {displayedLocations.map((loc) => (
+                  <button
+                    type="button"
+                    key={loc.id}
+                    onClick={() =>
+                      setSelectedLocation((prev) =>
+                        prev === loc.id ? null : loc.id,
+                      )
+                    }
+                    className={`flex w-full items-center justify-between rounded-lg border p-3 cursor-pointer transition-all hover:border-ink-600 ${
+                      selectedLocation === loc.id
+                        ? 'border-cyan-500/40 bg-cyan-500/5'
+                        : 'border-ink-700/60 bg-ink-850/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-3.5 w-3.5 text-cyan-400" />
+                      <div>
+                        <p className="text-sm font-medium text-slate-200">{loc.label}</p>
+                        <p className="text-[10px] text-slate-500">{loc.sublabel}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="rounded border border-ink-600/60 bg-ink-800/60 px-1.5 py-0.5 text-[9px] text-slate-400">
+                        {loc.radiusKm} km
+                      </span>
+                      {loc.alertRules?.map((rule) => (
+                        <span
+                          key={rule}
+                          className="rounded border border-ink-600/60 bg-ink-800/60 px-1.5 py-0.5 text-[9px] text-slate-400"
+                        >
+                          {hazardTypeLabels[rule].slice(0, 4)}
+                        </span>
+                      ))}
+                    </div>
+                  </button>
               ))}
             </div>
 
             <Link to="/settings" className="btn-secondary mt-4 w-full">
               <Settings2 className="h-4 w-4" />
-              Manage Locations
+              {isAuthenticated ? 'Manage Watchlist' : 'Sign in to manage watchlist'}
             </Link>
           </div>
         </div>

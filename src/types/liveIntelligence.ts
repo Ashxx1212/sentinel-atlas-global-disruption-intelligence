@@ -30,6 +30,36 @@ export interface LiveUsgsIncidentRecord {
   is_active: boolean | null;
 }
 
+export interface LiveUsgsIncidentSourceSummary {
+  id: string;
+  source_id: string | null;
+  source_record_url: string | null;
+  source_record_title: string | null;
+  record_state: string | null;
+  integrity_status: string | null;
+  data_mode: string | null;
+  source_event_time: string | null;
+  source_updated_at: string | null;
+  fetched_at: string | null;
+}
+
+export interface LiveUsgsIncidentUpdateSummary {
+  id: string;
+  update_type: string | null;
+  title: string | null;
+  body: string | null;
+  occurred_at: string | null;
+  data_mode: string | null;
+  integrity_status: string | null;
+}
+
+export interface LiveUsgsIncidentDetailResult {
+  incident: LiveUsgsIncidentRecord | null;
+  source: LiveUsgsSourceStatus | null;
+  sources: LiveUsgsIncidentSourceSummary[];
+  updates: LiveUsgsIncidentUpdateSummary[];
+}
+
 export interface LiveUsgsFetchResult {
   state: LiveUsgsState;
   records: LiveUsgsIncidentRecord[];

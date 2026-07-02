@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
+import { useMemo, useState } from 'react';
 import {
   Activity,
   AlertOctagon,
@@ -21,7 +22,8 @@ import {
   mockIntelligenceStream,
   hazardTypeLabels,
 } from '../data/mockIncidents';
-import type { IntelligenceStreamEntry, PriorityRegion, Incident } from '../types';
+import type { IntelligenceStreamEntry, PriorityRegion } from '../types';
+import type { HybridIncident } from '../types/hybridIntelligence';
 import { MetricCard } from '../components/MetricCard';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { SourceHealthCard } from '../components/SourceHealthCard';
@@ -30,7 +32,7 @@ import { MockMapWorkspace } from '../components/MockMapWorkspace';
 import { IncidentDrawer } from '../components/IncidentDrawer';
 import { PageHeader, PrototypeNotice, SectionHeader } from '../components/ui';
 import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
-import { useState } from 'react';
+import { buildHybridIncidentFromFixture } from '../lib/hybridIncidents';
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -83,17 +85,19 @@ function statusTone(state: string): string {
 
 export function CommandCentrePage() {
   const navigate = useNavigate();
-  const [drawerIncident, setDrawerIncident] = useState<Incident | null>(null);
+  const [drawerIncident, setDrawerIncident] = useState<HybridIncident | null>(null);
   const { state, source, recordCount, errorMessage, refresh } = useLiveUsgsIncidents();
 
-  const activeCount = mockIncidents.filter((i) => i.status === 'active').length;
-  const criticalCount = mockIncidents.filter((i) => i.severity === 'critical').length;
-  const watchedAffected = 3;
-  const operationalSources = mockSources.filter((s) => s.health === 'operational').length;
+  const commandMapIncidents = useMemo<HybridIncident[]>(() => mockIncidents.map(buildHybridIncidentFromFixture), []);
 
-  const sortedStream = [...mockIntelligenceStream].sort(
+  const activeCount = useMemo(() => mockIncidents.filter((i) => i.status === 'active').length, []);
+  const criticalCount = useMemo(() => mockIncidents.filter((i) => i.severity === 'critical').length, []);
+  const watchedAffected = 3;
+  const operationalSources = useMemo(() => mockSources.filter((s) => s.health === 'operational').length, []);
+
+  const sortedStream = useMemo(() => [...mockIntelligenceStream].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
+  ), []);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
@@ -172,11 +176,12 @@ export function CommandCentrePage() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => { void refresh(); }}
+              onClick={() => { void refresh(true); }}
               className="btn-secondary"
+              disabled={state === 'loading'}
             >
-              <RefreshCw className="h-4 w-4" />
-              Refresh stored layer
+              <RefreshCw className={`h-4 w-4 ${state === 'loading' ? 'animate-spin' : ''}`} />
+              {state === 'loading' ? 'Refreshing stored layer...' : 'Refresh stored layer'}
             </button>
             <Link to="/global-map" className="btn-primary">
               <MapPin className="h-4 w-4" />
@@ -256,7 +261,7 @@ export function CommandCentrePage() {
         <div className="lg:col-span-2">
           <SectionHeader title="Global Hazard Map" icon={MapPin} />
           <MockMapWorkspace
-            incidents={mockIncidents}
+            incidents={commandMapIncidents}
             onMarkerClick={setDrawerIncident}
             className="h-[400px] lg:h-[480px]"
           />

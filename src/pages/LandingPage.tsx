@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { mockIncidents } from '../data/mockIncidents';
 import { MockMapWorkspace } from '../components/MockMapWorkspace';
+import { buildHybridIncidentFromFixture } from '../lib/hybridIncidents';
 
 const trustSources = [
   { name: 'USGS', role: 'Seismic events' },
@@ -19,6 +20,8 @@ const trustSources = [
 ];
 
 export function LandingPage() {
+  const mapIncidents = mockIncidents.map(buildHybridIncidentFromFixture);
+
   return (
     <div className="relative min-h-screen overflow-hidden bg-ink-950">
       {/* Background grid */}
@@ -108,7 +111,7 @@ export function LandingPage() {
           <div className="relative animate-fade-in" style={{ animationDelay: '200ms' }}>
             <div className="relative aspect-[4/3] overflow-hidden rounded-2xl border border-ink-700/60 bg-ink-900 shadow-panel">
               <MockMapWorkspace
-                incidents={mockIncidents}
+                incidents={mapIncidents}
                 interactive={false}
                 showLabels={false}
                 className="h-full"

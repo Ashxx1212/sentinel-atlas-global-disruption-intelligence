@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   FileText,
@@ -84,34 +84,44 @@ export function BriefingPage() {
   const [briefingGenerated, setBriefingGenerated] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [assemblyStage, setAssemblyStage] = useState(0);
+  const generationTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const clearGenerationTimers = () => {
+    generationTimersRef.current.forEach(clearTimeout);
+    generationTimersRef.current = [];
+  };
 
   const handleGenerate = () => {
+    clearGenerationTimers();
     setGenerating(true);
     setBriefingGenerated(false);
     setAssemblyStage(0);
 
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    timers.push(setTimeout(() => setAssemblyStage(1), 0));
-    timers.push(setTimeout(() => setAssemblyStage(2), 350));
-    timers.push(setTimeout(() => setAssemblyStage(3), 700));
-    timers.push(setTimeout(() => setAssemblyStage(4), 1050));
-    timers.push(
+    generationTimersRef.current = [
+      setTimeout(() => setAssemblyStage(1), 0),
+      setTimeout(() => setAssemblyStage(2), 350),
+      setTimeout(() => setAssemblyStage(3), 700),
+      setTimeout(() => setAssemblyStage(4), 1050),
       setTimeout(() => {
         setAssemblyStage(4);
         setGenerating(false);
         setBriefingGenerated(true);
       }, 1400),
-    );
-
-    return () => timers.forEach(clearTimeout);
+    ];
   };
 
   const shiftDate = (days: number) => {
+    clearGenerationTimers();
     const d = new Date(selectedDate);
     d.setDate(d.getDate() + days);
     setSelectedDate(d);
+    setGenerating(false);
     setBriefingGenerated(false);
   };
+
+  useEffect(() => () => {
+    clearGenerationTimers();
+  }, []);
 
   const isAtMinDate =
     Math.round((today.getTime() - selectedDate.getTime()) / 86400000) >= 7;
