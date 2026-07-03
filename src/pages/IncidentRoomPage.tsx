@@ -89,7 +89,7 @@ function IncidentVisual({ incident }: { incident: HybridIncident }) {
     <div
       className="relative overflow-hidden rounded-xl border border-ink-700/60 bg-ink-900 h-56 sm:h-64"
       role="img"
-      aria-label={`Illustrative location frame for ${incident.title} — Prototype Mode`}
+      aria-label={`Illustrative location frame for ${incident.title}`}
     >
       {/* Grid texture */}
       <div className="absolute inset-0 grid-texture opacity-60" />
@@ -149,7 +149,9 @@ function IncidentVisual({ incident }: { incident: HybridIncident }) {
 
       {/* Corner labels */}
       <div className="pointer-events-none absolute top-2 left-3 font-mono text-[10px] text-cyan-500/40">
-        ILLUSTRATIVE LOCATION FRAME · PROTOTYPE MODE
+        {incident.dataMode === 'live_source'
+          ? 'SOURCE LOCATION FRAME · STORED COORDINATES'
+          : 'ILLUSTRATIVE LOCATION FRAME · PROTOTYPE MODE'}
       </div>
       <div className="pointer-events-none absolute bottom-2 left-3 font-mono text-[10px] text-slate-600">
         {incident.coordinates.lat.toFixed(2)}°, {incident.coordinates.lng.toFixed(2)}°
@@ -170,7 +172,7 @@ function KeyFactsGrid({ incident }: { incident: HybridIncident }) {
     { label: 'Hazard Type', value: hazardTypeLabels[incident.hazardType] },
     { label: 'Location', value: incident.location, icon: MapPin },
     { label: 'Coordinates', value: `${incident.coordinates.lat.toFixed(2)}°, ${incident.coordinates.lng.toFixed(2)}°`, mono: true },
-    { label: 'Fixture Freshness', value: formatTimestamp(incident.updatedAt), icon: Clock },
+    { label: incident.dataMode === 'live_source' ? 'Source Update' : 'Fixture Freshness', value: formatTimestamp(incident.updatedAt), icon: Clock },
     { label: 'Integrity State', value: incident.integrity, badge: true, badgeType: 'integrity' },
   ];
 
@@ -201,6 +203,12 @@ function KeyFactsGrid({ incident }: { incident: HybridIncident }) {
           <p className="mt-1 text-sm text-slate-200">{source.dataUseRole}</p>
         </div>
       )}
+      {incident.dataMode === 'live_source' && !source && (
+        <div className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-3">
+          <p className="text-xs text-slate-500">Source Role</p>
+          <p className="mt-1 text-sm text-slate-200">Source-backed event metadata</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -212,6 +220,7 @@ function EvidenceLedger({ incident }: { incident: HybridIncident }) {
     <div className="space-y-3">
       {incident.evidence.map((ev) => {
         const source = mockSources.find((s) => s.shortName === ev.source);
+        const hasSourceUrl = ev.url.trim().length > 0;
         return (
           <div key={ev.id} className="panel panel-hover p-4 transition-all">
             <div className="flex items-start justify-between gap-3">
@@ -242,16 +251,35 @@ function EvidenceLedger({ incident }: { incident: HybridIncident }) {
             </div>
             <div className="mt-3 flex items-center justify-between border-t border-ink-700/60 pt-3">
               <span className="text-[10px] text-slate-600">
-                Illustrative source record · Prototype source trace
+                {incident.dataMode === 'live_source'
+                  ? 'Source-backed evidence record'
+                  : 'Illustrative source record · Prototype source trace'}
               </span>
-              <span className="flex items-center gap-1.5 text-[10px] text-slate-600">
-                <ExternalLink className="h-3 w-3" />
-                No live source URL connected in this build
-              </span>
+              {hasSourceUrl ? (
+                <a
+                  href={ev.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 text-[10px] text-cyan-300 transition-colors hover:text-cyan-200"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  View source URL
+                </a>
+              ) : (
+                <span className="flex items-center gap-1.5 text-[10px] text-slate-600">
+                  <ExternalLink className="h-3 w-3" />
+                  Source URL unavailable
+                </span>
+              )}
             </div>
           </div>
         );
       })}
+      {incident.evidence.length === 0 && (
+        <div className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-4 text-sm text-slate-500">
+          No source evidence records are stored for this incident yet.
+        </div>
+      )}
     </div>
   );
 }
@@ -542,7 +570,7 @@ export function IncidentRoomPage() {
               <IntegrityBadge status={incident.integrity} size="xs" />
               <span className={`chip ${incident.dataMode === 'live_source' ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-400' : 'border-warning-500/20 bg-warning-500/5 text-warning-400'}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${incident.dataMode === 'live_source' ? 'bg-cyan-400' : 'bg-warning-500'}`} />
-                {incident.dataMode === 'live_source' ? 'LIVE SOURCE · USGS' : 'PROTOTYPE FIXTURE'}
+                {incident.dataMode === 'live_source' ? incident.sourceLabel : 'PROTOTYPE FIXTURE'}
               </span>
             </div>
 
@@ -581,7 +609,7 @@ export function IncidentRoomPage() {
             </div>
             <div className="flex items-center gap-2 text-xs text-slate-400 lg:justify-end">
               <Clock className="h-3.5 w-3.5 text-slate-500" />
-              <span>Fixture refresh: {formatTimestamp(incident.updatedAt)}</span>
+              <span>{incident.dataMode === 'live_source' ? 'Source update' : 'Fixture refresh'}: {formatTimestamp(incident.updatedAt)}</span>
             </div>
           </div>
         </div>
@@ -591,8 +619,8 @@ export function IncidentRoomPage() {
           <Info className={`h-3.5 w-3.5 flex-shrink-0 mt-0.5 ${incident.dataMode === 'live_source' ? 'text-cyan-400' : 'text-warning-400'}`} />
           <p className="text-xs text-slate-400 leading-relaxed">
             {incident.dataMode === 'live_source'
-              ? 'USGS source record. Sentinel Atlas has not independently validated this observation.'
-              : 'This Incident Room uses local prototype fixture data. It is not an official warning or live-risk assessment.'}
+              ? `${incident.sourceName} source-backed event metadata. Sentinel Atlas has not independently validated this source observation.`
+              : 'This Incident Room uses local prototype fixture data. It is not an operational warning or live-risk assessment.'}
           </p>
         </div>
       </div>
@@ -650,11 +678,9 @@ export function IncidentRoomPage() {
                   <div>
                     <h3 className="text-sm font-semibold text-slate-200">Why this is shown</h3>
                     <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-                      This incident appears in the Sentinel Atlas prototype because it matches
-                      the current hazard filters and exists in the local fixture dataset. In the
-                      full platform, incidents would be surfaced based on your watchlist
-                      proximity, alert rules, and severity thresholds. Map position and incident
-                      context are illustrative in this prototype.
+                      {incident.dataMode === 'live_source'
+                        ? `This incident appears because it is an active source-backed record from ${incident.sourceName}. Sentinel Atlas preserves the source metadata and does not convert it into an operational warning.`
+                        : 'This incident appears in the Sentinel Atlas prototype because it matches the current hazard filters and exists in the local fixture dataset. In the full platform, incidents would be surfaced based on your watchlist proximity, alert rules, and severity thresholds. Map position and incident context are illustrative in this prototype.'}
                     </p>
                   </div>
                 </div>
@@ -685,16 +711,22 @@ export function IncidentRoomPage() {
                   Incident Timeline
                 </h3>
                 <span className="text-[10px] text-slate-600">
-                  Prototype fixture updates
+                  {incident.dataMode === 'live_source' ? 'Source-backed updates' : 'Prototype fixture updates'}
                 </span>
               </div>
-              <IncidentTimeline entries={incident.timeline} />
-              <div className="mt-4 flex items-start gap-2 rounded-lg border border-warning-500/15 bg-warning-500/5 p-3">
-                <Info className="h-3.5 w-3.5 flex-shrink-0 text-warning-400 mt-0.5" />
+              {incident.timeline.length > 0 ? (
+                <IncidentTimeline entries={incident.timeline} />
+              ) : (
+                <div className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-4 text-sm text-slate-500">
+                  No source timeline updates are stored for this incident yet.
+                </div>
+              )}
+              <div className={`mt-4 flex items-start gap-2 rounded-lg border p-3 ${incident.dataMode === 'live_source' ? 'border-cyan-500/15 bg-cyan-500/5' : 'border-warning-500/15 bg-warning-500/5'}`}>
+                <Info className={`h-3.5 w-3.5 flex-shrink-0 mt-0.5 ${incident.dataMode === 'live_source' ? 'text-cyan-400' : 'text-warning-400'}`} />
                 <p className="text-xs text-slate-500 leading-relaxed">
-                  All timeline entries are prototype fixture updates. They do not represent
-                  official evacuations, injuries, emergency orders, confirmed damage, or
-                  response actions.
+                  {incident.dataMode === 'live_source'
+                    ? 'Timeline entries are source-backed metadata updates. They do not represent emergency orders, confirmed damage, or response actions.'
+                    : 'All timeline entries are prototype fixture updates. They do not represent official evacuations, injuries, emergency orders, confirmed damage, or response actions.'}
                 </p>
               </div>
             </div>
@@ -707,7 +739,7 @@ export function IncidentRoomPage() {
                   Source Evidence Ledger
                 </h3>
                 <span className="text-[10px] text-slate-600">
-                  Illustrative source records
+                  {incident.dataMode === 'live_source' ? incident.sourceLabel : 'Illustrative source records'}
                 </span>
               </div>
               <EvidenceLedger incident={incident} />

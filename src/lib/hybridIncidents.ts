@@ -1,44 +1,65 @@
 import { mockIncidents } from '../data/mockIncidents';
-import { fetchLiveUsgsIntelligence } from './liveUsgsIncidents';
+import { fetchLiveUsgsIncidentDetail, fetchLiveUsgsIntelligence } from './liveUsgsIncidents';
 import type { HybridIncident } from '../types/hybridIntelligence';
-import type { LiveUsgsIncidentRecord } from '../types/liveIntelligence';
-import type { Incident, Severity, HazardType } from '../types';
+import type {
+  LiveUsgsIncidentRecord,
+  LiveUsgsIncidentSourceSummary,
+  LiveUsgsIncidentUpdateSummary,
+} from '../types/liveIntelligence';
+import type {
+  DataIntegrityStatus,
+  EvidenceRecord,
+  HazardType,
+  Incident,
+  IncidentStatus,
+  Severity,
+  TimelineEntry,
+} from '../types';
+
+const FALLBACK_TIMESTAMP = new Date(0).toISOString();
 
 function toDisplaySeverity(value: string | null): Severity {
   if (value === 'critical' || value === 'high' || value === 'elevated' || value === 'advisory') {
     return value;
   }
-  return 'elevated';
+  return 'advisory';
 }
 
-function toDisplayHazard(value: string | null): HazardType {
+function toDisplayHazard(value: string | null, sourceCode: string | null): HazardType {
   if (value === 'earthquake' || value === 'wildfire' || value === 'flood' || value === 'cyclone' || value === 'volcano' || value === 'severe-weather') {
     return value;
   }
-  return 'earthquake';
+  return sourceCode === 'usgs' ? 'earthquake' : 'severe-weather';
 }
 
-function toDisplayIntegrity(value: string | null): 'verified' | 'forecast' | 'pending' | 'unavailable' {
+function toDisplayIntegrity(value: string | null): DataIntegrityStatus {
   if (value === 'verified' || value === 'forecast' || value === 'pending' || value === 'unavailable') {
     return value;
   }
   return 'pending';
 }
 
+function toDisplayStatus(value: string | null, isActive: boolean | null): IncidentStatus {
+  if (value === 'active' || value === 'monitoring' || value === 'contained' || value === 'resolved') {
+    return value;
+  }
+  return isActive ? 'active' : 'monitoring';
+}
+
 function toDisplayLocation(record: LiveUsgsIncidentRecord): string {
   return record.place_name?.trim() || 'Unavailable from current source record.';
 }
 
-function toDisplayTitle(record: LiveUsgsIncidentRecord): string {
-  return record.title?.trim() || 'USGS source-backed earthquake record';
+function toDisplayTitle(record: LiveUsgsIncidentRecord, sourceName: string): string {
+  return record.title?.trim() || `${sourceName} source-backed record`;
 }
 
-function toDisplaySummary(record: LiveUsgsIncidentRecord): string {
-  return record.summary?.trim() || 'Stored source-backed earthquake record from the USGS Earthquake Catalog.';
+function toDisplaySummary(record: LiveUsgsIncidentRecord, sourceName: string): string {
+  return record.summary?.trim() || `Stored source-backed event metadata from ${sourceName}.`;
 }
 
-function toDisplaySource(record: LiveUsgsIncidentRecord): string {
-  return record.title?.trim() || 'USGS Earthquake Catalog';
+function toDisplaySource(sourceName: string, sourceCode: string): string {
+  return sourceName.trim() || sourceCode.toUpperCase() || 'Live source record';
 }
 
 function toDisplayCoordinates(record: LiveUsgsIncidentRecord): { lat: number; lng: number } {
@@ -58,35 +79,92 @@ function toDisplayMapPosition(record: LiveUsgsIncidentRecord): { mapX: number; m
   };
 }
 
-export function buildHybridIncidentFromLiveRecord(record: LiveUsgsIncidentRecord, sourceName: string, sourceCode: string): HybridIncident {
+export function toLiveSourceRecordLabel(sourceCode: string | null, sourceName: string | null): string {
+  if (sourceCode === 'usgs') {
+    return 'SOURCE-BACKED · USGS EARTHQUAKE CATALOG';
+  }
+
+  if (sourceCode === 'eonet') {
+    return 'SOURCE-BACKED · NASA EONET';
+  }
+
+  const normalizedSourceName = sourceName?.trim();
+  return normalizedSourceName
+    ? `SOURCE-BACKED · ${normalizedSourceName.toUpperCase()}`
+    : 'SOURCE-BACKED · LIVE SOURCE RECORD';
+}
+
+function buildTimelineFromLiveUpdates(
+  updates: LiveUsgsIncidentUpdateSummary[],
+  sourceName: string,
+): TimelineEntry[] {
+  return updates.map((update) => ({
+    id: update.id,
+    timestamp: update.occurred_at ?? FALLBACK_TIMESTAMP,
+    title: update.title?.trim() || 'Source metadata update',
+    description: update.body?.trim() || 'Source-backed event metadata was stored in Sentinel Atlas.',
+    integrity: toDisplayIntegrity(update.integrity_status),
+    source: sourceName,
+  }));
+}
+
+function buildEvidenceFromLiveSources(
+  sources: LiveUsgsIncidentSourceSummary[],
+  sourceName: string,
+): EvidenceRecord[] {
+  return sources.map((source) => ({
+    id: source.id,
+    title: source.source_record_title?.trim() || `${sourceName} source record`,
+    source: sourceName,
+    url: source.source_record_url ?? '',
+    timestamp: source.fetched_at ?? source.source_updated_at ?? source.source_event_time ?? FALLBACK_TIMESTAMP,
+    integrity: toDisplayIntegrity(source.integrity_status),
+    summary: `Source record state: ${source.record_state ?? 'available'}.`,
+  }));
+}
+
+interface LiveRecordBuildOptions {
+  sourceRecordUrl?: string | null;
+  timeline?: TimelineEntry[];
+  evidence?: EvidenceRecord[];
+}
+
+export function buildHybridIncidentFromLiveRecord(
+  record: LiveUsgsIncidentRecord,
+  fallbackSourceName = 'Live source record',
+  fallbackSourceCode = 'live-source',
+  options: LiveRecordBuildOptions = {},
+): HybridIncident {
+  const sourceName = record.source_display_name ?? fallbackSourceName;
+  const sourceCode = record.source_code ?? fallbackSourceCode;
   const coordinates = toDisplayCoordinates(record);
   const mapPosition = toDisplayMapPosition(record);
-  const sourceRecordUrl = null;
 
   return {
     id: record.id,
-    title: toDisplayTitle(record),
-    hazardType: toDisplayHazard(record.hazard_type),
+    title: toDisplayTitle(record, sourceName),
+    hazardType: toDisplayHazard(record.hazard_type, sourceCode),
     severity: toDisplaySeverity(record.severity),
-    status: record.is_active ? 'active' : 'monitoring',
-    summary: toDisplaySummary(record),
+    status: toDisplayStatus(record.status, record.is_active),
+    summary: toDisplaySummary(record, sourceName),
     location: toDisplayLocation(record),
     coordinates,
-    source: toDisplaySource(record),
+    source: toDisplaySource(sourceName, sourceCode),
     sourceId: sourceCode,
-    reportedAt: record.event_time ?? new Date(0).toISOString(),
-    updatedAt: record.source_updated_at ?? record.last_source_fetched_at ?? record.event_time ?? new Date(0).toISOString(),
+    reportedAt: record.event_time ?? FALLBACK_TIMESTAMP,
+    updatedAt: record.source_updated_at ?? record.last_source_fetched_at ?? record.event_time ?? FALLBACK_TIMESTAMP,
     integrity: toDisplayIntegrity(record.integrity_status),
     mapX: mapPosition.mapX,
     mapY: mapPosition.mapY,
-    timeline: [],
-    evidence: [],
+    timeline: options.timeline ?? [],
+    evidence: options.evidence ?? [],
     context: [],
     relatedIds: [],
     dataMode: 'live_source',
     sourceName,
     sourceCode,
-    sourceRecordUrl,
+    sourceLabel: toLiveSourceRecordLabel(sourceCode, sourceName),
+    sourceRecordUrl: options.sourceRecordUrl ?? null,
     sourceFetchedAt: record.last_source_fetched_at,
     placeName: record.place_name ?? null,
     eventTime: record.event_time ?? null,
@@ -103,6 +181,7 @@ export function buildHybridIncidentFromFixture(incident: Incident): HybridIncide
     dataMode: 'prototype_fixture',
     sourceName: incident.source,
     sourceCode: incident.sourceId,
+    sourceLabel: 'PROTOTYPE FIXTURE',
     sourceRecordUrl: null,
     sourceFetchedAt: incident.updatedAt,
     placeName: incident.location,
@@ -116,7 +195,13 @@ export function buildHybridIncidentFromFixture(incident: Incident): HybridIncide
 
 export async function getHybridIncidents(forceRefresh = false): Promise<HybridIncident[]> {
   const liveResult = await fetchLiveUsgsIntelligence({ forceRefresh });
-  const liveIncidents = (liveResult.records ?? []).map((record) => buildHybridIncidentFromLiveRecord(record, liveResult.source?.display_name ?? 'USGS', liveResult.source?.code ?? 'usgs'));
+  const liveIncidents = (liveResult.records ?? []).map((record) =>
+    buildHybridIncidentFromLiveRecord(
+      record,
+      record.source_display_name ?? liveResult.source?.display_name ?? 'Live source record',
+      record.source_code ?? liveResult.source?.code ?? 'live-source',
+    ),
+  );
   const fixtureIncidents = mockIncidents.map(buildHybridIncidentFromFixture);
 
   return [...fixtureIncidents, ...liveIncidents];
@@ -128,11 +213,29 @@ export async function getHybridIncidentById(id: string): Promise<HybridIncident 
     return buildHybridIncidentFromFixture(fixture);
   }
 
+  const detail = await fetchLiveUsgsIncidentDetail(id);
+  if (detail.incident) {
+    const sourceName = detail.source?.display_name ?? detail.incident.source_display_name ?? 'Live source record';
+    const sourceCode = detail.source?.code ?? detail.incident.source_code ?? 'live-source';
+    const primarySourceRecord =
+      detail.sources.find((source) => source.source_id === detail.source?.id) ?? detail.sources[0];
+
+    return buildHybridIncidentFromLiveRecord(detail.incident, sourceName, sourceCode, {
+      sourceRecordUrl: primarySourceRecord?.source_record_url ?? null,
+      timeline: buildTimelineFromLiveUpdates(detail.updates, sourceName),
+      evidence: buildEvidenceFromLiveSources(detail.sources, sourceName),
+    });
+  }
+
   const liveResult = await fetchLiveUsgsIntelligence();
   const liveRecord = liveResult.records.find((record) => record.id === id);
   if (!liveRecord) {
     return undefined;
   }
 
-  return buildHybridIncidentFromLiveRecord(liveRecord, liveResult.source?.display_name ?? 'USGS', liveResult.source?.code ?? 'usgs');
+  return buildHybridIncidentFromLiveRecord(
+    liveRecord,
+    liveRecord.source_display_name ?? liveResult.source?.display_name ?? 'Live source record',
+    liveRecord.source_code ?? liveResult.source?.code ?? 'live-source',
+  );
 }

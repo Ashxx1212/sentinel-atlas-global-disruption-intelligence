@@ -423,3 +423,9 @@ entrypoint = "./functions/sync-usgs-earthquakes/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/sync-usgs-earthquakes/*.html" ]
+
+[functions.sync-eonet-events]
+enabled = true
+verify_jwt = false
+import_map = "./functions/sync-eonet-events/deno.json"
+entrypoint = "./functions/sync-eonet-events/index.ts"

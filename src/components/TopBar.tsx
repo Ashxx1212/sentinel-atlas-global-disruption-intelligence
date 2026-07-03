@@ -32,6 +32,12 @@ interface SearchResult {
   route: string;
 }
 
+function liveSourceLabel(code: string, fallbackName: string): string {
+  if (code === 'usgs') return 'USGS Earthquake Catalog';
+  if (code === 'eonet') return 'NASA EONET';
+  return fallbackName || code.toUpperCase();
+}
+
 export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   const navigate = useNavigate();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -46,15 +52,29 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
 
   const unreadCount = mockAlerts.filter((a) => !a.read).length;
   const latestAlerts = mockAlerts.slice(0, 3);
-  const { source, recordCount, state } = useLiveUsgsIncidents();
+  const { records, sources, state } = useLiveUsgsIncidents();
   const { isAuthenticated, user, profile, signOut, isConfigured } = useAuth();
   const profileDisplayName =
     isAuthenticated
       ? profile?.display_name?.trim() || user?.email?.split('@')[0] || 'Signed-in analyst'
       : 'Preview analyst';
-  const liveUsgsAvailable = state === 'success' && Boolean(source?.code) && recordCount > 0;
-  const statusLabel = liveUsgsAvailable
-    ? 'Hybrid Mode · 1 live source · 3 prototype fixtures'
+  const liveSources = useMemo(
+    () => sources.filter((source) => source.source_mode === 'live_source' || source.code === 'usgs' || source.code === 'eonet'),
+    [sources],
+  );
+  const liveSourceCodes = useMemo(() => new Set(liveSources.map((source) => source.code)), [liveSources]);
+  const liveRecordCountByCode = useMemo(() => {
+    const counts = new Map<string, number>();
+    records.forEach((record) => {
+      if (!record.source_code) return;
+      counts.set(record.source_code, (counts.get(record.source_code) ?? 0) + 1);
+    });
+    return counts;
+  }, [records]);
+  const prototypeSourceCount = mockSources.filter((sourceItem) => !liveSourceCodes.has(sourceItem.id)).length;
+  const liveSourcesAvailable = liveSources.length > 0 && state !== 'unconfigured' && state !== 'error';
+  const statusLabel = liveSourcesAvailable
+    ? `Hybrid Mode · ${liveSources.length} live source${liveSources.length === 1 ? '' : 's'} · ${prototypeSourceCount} prototype fixture${prototypeSourceCount === 1 ? '' : 's'}`
     : 'Prototype Mode · 4 simulated sources';
 
   // Build search results
@@ -285,15 +305,15 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
           aria-label="Hybrid data status"
           aria-expanded={statusOpen}
           className={`flex items-center gap-2 rounded-lg border px-3 py-2 transition-colors ${
-            liveUsgsAvailable
+            liveSourcesAvailable
               ? 'border-cyan-500/20 bg-cyan-500/5 hover:border-cyan-500/40'
               : 'border-warning-500/20 bg-warning-500/5 hover:border-warning-500/40'
           }`}
         >
-          <span className={`h-2 w-2 rounded-full ${liveUsgsAvailable ? 'bg-cyan-400 animate-pulse-dot' : 'bg-warning-500 animate-amber-pulse'}`} />
+          <span className={`h-2 w-2 rounded-full ${liveSourcesAvailable ? 'bg-cyan-400 animate-pulse-dot' : 'bg-warning-500 animate-amber-pulse'}`} />
           <span className="text-xs text-slate-400">
-            <span className={`font-medium ${liveUsgsAvailable ? 'text-cyan-300' : 'text-warning-400'}`}>
-              {liveUsgsAvailable ? 'Hybrid Mode' : 'Prototype Mode'}
+            <span className={`font-medium ${liveSourcesAvailable ? 'text-cyan-300' : 'text-warning-400'}`}>
+              {liveSourcesAvailable ? 'Hybrid Mode' : 'Prototype Mode'}
             </span>
             {' · '}{statusLabel.split(' · ').slice(1).join(' · ')}
           </span>
@@ -311,20 +331,35 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
                   </p>
                 </div>
                 <div className="mt-3 space-y-2">
-                  <div className={`rounded-lg border p-2.5 ${liveUsgsAvailable ? 'border-cyan-500/20 bg-cyan-500/5' : 'border-ink-700/60 bg-ink-850/30'}`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-300">USGS Earthquake Catalog</span>
-                      <span className={`text-[10px] ${liveUsgsAvailable ? 'text-cyan-300' : 'text-slate-500'}`}>
-                        {liveUsgsAvailable ? 'Live source connected' : 'Unavailable'}
-                      </span>
+                  {liveSources.length > 0 ? liveSources.map((source) => {
+                    const count = liveRecordCountByCode.get(source.code) ?? 0;
+                    const operational = source.ingestion_status === 'operational';
+
+                    return (
+                      <div key={source.id} className={`rounded-lg border p-2.5 ${operational ? 'border-cyan-500/20 bg-cyan-500/5' : 'border-ink-700/60 bg-ink-850/30'}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-xs text-slate-300">{liveSourceLabel(source.code, source.display_name)}</span>
+                          <span className={`text-[10px] ${operational ? 'text-cyan-300' : 'text-slate-500'}`}>
+                            {source.ingestion_status ?? 'status unavailable'}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[10px] text-slate-500">
+                          Source-backed records · {count} active
+                        </p>
+                      </div>
+                    );
+                  }) : (
+                    <div className="rounded-lg border border-ink-700/60 bg-ink-850/30 p-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-slate-300">LIVE SOURCE RECORDS</span>
+                        <span className="text-[10px] text-slate-500">Unavailable</span>
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        Live source data is not currently available.
+                      </p>
                     </div>
-                    <p className="mt-1 text-[10px] text-slate-500">
-                      {liveUsgsAvailable
-                        ? `Stored source-backed earthquake records · ${recordCount} active`
-                        : 'Live source data is not currently available.'}
-                    </p>
-                  </div>
-                  {mockSources.filter((src) => src.id !== 'usgs').map((src) => (
+                  )}
+                  {mockSources.filter((src) => !liveSourceCodes.has(src.id)).map((src) => (
                     <div key={src.id} className="flex items-center justify-between rounded-lg border border-ink-700/60 bg-ink-850/30 px-2.5 py-2">
                       <span className="text-xs text-slate-400">{src.shortName}</span>
                       <span className="flex items-center gap-1.5 text-[10px] text-slate-500">

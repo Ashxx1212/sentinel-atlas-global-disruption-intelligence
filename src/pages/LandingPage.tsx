@@ -102,7 +102,7 @@ export function LandingPage() {
             <div className="mt-6 flex items-start gap-2 rounded-lg border border-warning-500/20 bg-warning-500/5 px-4 py-3">
               <AlertTriangle className="h-4 w-4 flex-shrink-0 text-warning-400 mt-0.5" />
               <p className="text-xs text-slate-400">
-                Informational intelligence platform — not an official emergency alert service.
+                Informational intelligence platform — not an operational warning service.
               </p>
             </div>
           </div>
@@ -173,7 +173,7 @@ export function LandingPage() {
             ))}
           </div>
           <p className="mt-5 text-center text-[11px] text-slate-600">
-            Source labels shown for demonstration. No live data is ingested in this prototype.
+            Source labels are shown for clarity; authenticated app views separate source-backed records from prototype fixtures.
           </p>
         </div>
       </section>
@@ -223,7 +223,7 @@ export function LandingPage() {
               SENTINEL ATLAS // Global Disruption Intelligence — Prototype Build
             </p>
             <p className="text-xs text-slate-600">
-              This interface uses local prototype fixtures. No live public-source data is ingested in this build.
+              Authenticated views separate source-backed records from local prototype fixtures.
             </p>
           </div>
         </div>

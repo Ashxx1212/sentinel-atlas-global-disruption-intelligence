@@ -1,8 +1,28 @@
 import { supabase, isSupabaseConfigured } from './supabase';
-import type { LiveUsgsFetchResult, LiveUsgsIncidentRecord, LiveUsgsIncidentDetailResult, LiveUsgsSourceStatus } from '../types/liveIntelligence';
+import type {
+  LiveUsgsFetchResult,
+  LiveUsgsIncidentDetailResult,
+  LiveUsgsIncidentRecord,
+  LiveUsgsIncidentSourceSummary,
+  LiveUsgsIncidentUpdateSummary,
+  LiveUsgsSourceStatus,
+} from '../types/liveIntelligence';
+
+const LIVE_SOURCE_CODES = ['usgs', 'eonet'] as const;
 
 let cachedLiveUsgsResult: LiveUsgsFetchResult | null = null;
 let inFlightLiveUsgsRequest: Promise<LiveUsgsFetchResult> | null = null;
+
+function emptyResult(state: LiveUsgsFetchResult['state'], errorMessage: string | null = null): LiveUsgsFetchResult {
+  return {
+    state,
+    records: [],
+    source: null,
+    sources: [],
+    recordCount: 0,
+    errorMessage,
+  };
+}
 
 function normalizeSourceStatus(row: Record<string, unknown> | null): LiveUsgsSourceStatus | null {
   if (!row) {
@@ -19,9 +39,22 @@ function normalizeSourceStatus(row: Record<string, unknown> | null): LiveUsgsSou
   };
 }
 
-function normalizeIncident(row: Record<string, unknown>): LiveUsgsIncidentRecord {
+function buildSourcesById(sources: LiveUsgsSourceStatus[]): Map<string, LiveUsgsSourceStatus> {
+  return new Map(sources.map((source) => [source.id, source]));
+}
+
+function normalizeIncident(
+  row: Record<string, unknown>,
+  sourcesById: Map<string, LiveUsgsSourceStatus> = new Map(),
+): LiveUsgsIncidentRecord {
+  const primarySourceId = typeof row.primary_source_id === 'string' ? row.primary_source_id : null;
+  const source = primarySourceId ? sourcesById.get(primarySourceId) : null;
+
   return {
     id: String(row.id ?? ''),
+    primary_source_id: primarySourceId,
+    source_code: source?.code ?? null,
+    source_display_name: source?.display_name ?? null,
     canonical_key: typeof row.canonical_key === 'string' ? row.canonical_key : null,
     hazard_type: typeof row.hazard_type === 'string' ? row.hazard_type : null,
     severity: typeof row.severity === 'string' ? row.severity : null,
@@ -42,6 +75,52 @@ function normalizeIncident(row: Record<string, unknown>): LiveUsgsIncidentRecord
   };
 }
 
+function normalizeIncidentSource(row: Record<string, unknown>): LiveUsgsIncidentSourceSummary {
+  return {
+    id: String(row.id ?? ''),
+    source_id: typeof row.source_id === 'string' ? row.source_id : null,
+    source_record_url: typeof row.source_record_url === 'string' ? row.source_record_url : null,
+    source_record_title: typeof row.source_record_title === 'string' ? row.source_record_title : null,
+    record_state: typeof row.record_state === 'string' ? row.record_state : null,
+    integrity_status: typeof row.integrity_status === 'string' ? row.integrity_status : null,
+    data_mode: typeof row.data_mode === 'string' ? row.data_mode : null,
+    source_event_time: typeof row.source_event_time === 'string' ? row.source_event_time : null,
+    source_updated_at: typeof row.source_updated_at === 'string' ? row.source_updated_at : null,
+    fetched_at: typeof row.fetched_at === 'string' ? row.fetched_at : null,
+  };
+}
+
+function normalizeIncidentUpdate(row: Record<string, unknown>): LiveUsgsIncidentUpdateSummary {
+  return {
+    id: String(row.id ?? ''),
+    update_type: typeof row.update_type === 'string' ? row.update_type : null,
+    title: typeof row.title === 'string' ? row.title : null,
+    body: typeof row.body === 'string' ? row.body : null,
+    occurred_at: typeof row.occurred_at === 'string' ? row.occurred_at : null,
+    data_mode: typeof row.data_mode === 'string' ? row.data_mode : null,
+    integrity_status: typeof row.integrity_status === 'string' ? row.integrity_status : null,
+  };
+}
+
+async function fetchConfiguredLiveSources(): Promise<LiveUsgsSourceStatus[]> {
+  if (!supabase) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('data_sources')
+    .select('id, code, display_name, source_mode, ingestion_status, last_success_at')
+    .in('code', [...LIVE_SOURCE_CODES]);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? [])
+    .map((row) => normalizeSourceStatus(row as Record<string, unknown>))
+    .filter((source): source is LiveUsgsSourceStatus => source !== null);
+}
+
 export async function fetchLiveUsgsIncidentDetail(incidentId: string): Promise<LiveUsgsIncidentDetailResult> {
   if (!isSupabaseConfigured || !supabase) {
     return {
@@ -53,39 +132,36 @@ export async function fetchLiveUsgsIncidentDetail(incidentId: string): Promise<L
   }
 
   try {
-    const { data: sourceRows, error: sourceError } = await supabase
-      .from('data_sources')
-      .select('id, code, display_name, source_mode, ingestion_status, last_success_at')
-      .eq('code', 'usgs')
-      .maybeSingle();
-
-    const source = normalizeSourceStatus(sourceRows as Record<string, unknown> | null);
-
-    if (sourceError) {
-      return {
-        incident: null,
-        source,
-        sources: [],
-        updates: [],
-      };
-    }
-
-    const { data: incidentRows, error: incidentError } = await supabase
+    const { data: incidentRow, error: incidentError } = await supabase
       .from('incidents')
       .select(
-        'id, canonical_key, hazard_type, severity, status, integrity_status, data_mode, title, summary, place_name, latitude, longitude, event_time, source_updated_at, last_source_fetched_at, magnitude, depth_km, is_active',
+        'id, primary_source_id, canonical_key, hazard_type, severity, status, integrity_status, data_mode, title, summary, place_name, latitude, longitude, event_time, source_updated_at, last_source_fetched_at, magnitude, depth_km, is_active',
       )
       .eq('id', incidentId)
       .maybeSingle();
 
-    if (incidentError || !incidentRows) {
+    if (incidentError || !incidentRow) {
       return {
         incident: null,
-        source,
+        source: null,
         sources: [],
         updates: [],
       };
     }
+
+    const primarySourceId =
+      typeof incidentRow.primary_source_id === 'string' ? incidentRow.primary_source_id : null;
+
+    const { data: sourceRow, error: sourceError } = primarySourceId
+      ? await supabase
+        .from('data_sources')
+        .select('id, code, display_name, source_mode, ingestion_status, last_success_at')
+        .eq('id', primarySourceId)
+        .maybeSingle()
+      : { data: null, error: null };
+
+    const source = sourceError ? null : normalizeSourceStatus(sourceRow as Record<string, unknown> | null);
+    const sourcesById = source ? buildSourcesById([source]) : new Map<string, LiveUsgsSourceStatus>();
 
     const { data: sourceRowsData, error: sourcesError } = await supabase
       .from('incident_sources')
@@ -99,58 +175,11 @@ export async function fetchLiveUsgsIncidentDetail(incidentId: string): Promise<L
       .eq('incident_id', incidentId)
       .order('occurred_at', { ascending: false });
 
-    if (sourcesError || updatesError) {
-      return {
-        incident: normalizeIncident(incidentRows as Record<string, unknown>),
-        source,
-        sources: (sourceRowsData ?? []).map((row) => ({
-          id: String(row.id ?? ''),
-          source_id: typeof row.source_id === 'string' ? row.source_id : null,
-          source_record_url: typeof row.source_record_url === 'string' ? row.source_record_url : null,
-          source_record_title: typeof row.source_record_title === 'string' ? row.source_record_title : null,
-          record_state: typeof row.record_state === 'string' ? row.record_state : null,
-          integrity_status: typeof row.integrity_status === 'string' ? row.integrity_status : null,
-          data_mode: typeof row.data_mode === 'string' ? row.data_mode : null,
-          source_event_time: typeof row.source_event_time === 'string' ? row.source_event_time : null,
-          source_updated_at: typeof row.source_updated_at === 'string' ? row.source_updated_at : null,
-          fetched_at: typeof row.fetched_at === 'string' ? row.fetched_at : null,
-        })),
-        updates: (updateRowsData ?? []).map((row) => ({
-          id: String(row.id ?? ''),
-          update_type: typeof row.update_type === 'string' ? row.update_type : null,
-          title: typeof row.title === 'string' ? row.title : null,
-          body: typeof row.body === 'string' ? row.body : null,
-          occurred_at: typeof row.occurred_at === 'string' ? row.occurred_at : null,
-          data_mode: typeof row.data_mode === 'string' ? row.data_mode : null,
-          integrity_status: typeof row.integrity_status === 'string' ? row.integrity_status : null,
-        })),
-      };
-    }
-
     return {
-      incident: normalizeIncident(incidentRows as Record<string, unknown>),
+      incident: normalizeIncident(incidentRow as Record<string, unknown>, sourcesById),
       source,
-      sources: (sourceRowsData ?? []).map((row) => ({
-        id: String(row.id ?? ''),
-        source_id: typeof row.source_id === 'string' ? row.source_id : null,
-        source_record_url: typeof row.source_record_url === 'string' ? row.source_record_url : null,
-        source_record_title: typeof row.source_record_title === 'string' ? row.source_record_title : null,
-        record_state: typeof row.record_state === 'string' ? row.record_state : null,
-        integrity_status: typeof row.integrity_status === 'string' ? row.integrity_status : null,
-        data_mode: typeof row.data_mode === 'string' ? row.data_mode : null,
-        source_event_time: typeof row.source_event_time === 'string' ? row.source_event_time : null,
-        source_updated_at: typeof row.source_updated_at === 'string' ? row.source_updated_at : null,
-        fetched_at: typeof row.fetched_at === 'string' ? row.fetched_at : null,
-      })),
-      updates: (updateRowsData ?? []).map((row) => ({
-        id: String(row.id ?? ''),
-        update_type: typeof row.update_type === 'string' ? row.update_type : null,
-        title: typeof row.title === 'string' ? row.title : null,
-        body: typeof row.body === 'string' ? row.body : null,
-        occurred_at: typeof row.occurred_at === 'string' ? row.occurred_at : null,
-        data_mode: typeof row.data_mode === 'string' ? row.data_mode : null,
-        integrity_status: typeof row.integrity_status === 'string' ? row.integrity_status : null,
-      })),
+      sources: sourcesError ? [] : (sourceRowsData ?? []).map((row) => normalizeIncidentSource(row as Record<string, unknown>)),
+      updates: updatesError ? [] : (updateRowsData ?? []).map((row) => normalizeIncidentUpdate(row as Record<string, unknown>)),
     };
   } catch {
     return {
@@ -164,62 +193,58 @@ export async function fetchLiveUsgsIncidentDetail(incidentId: string): Promise<L
 
 async function fetchLiveUsgsIntelligenceFromSupabase(): Promise<LiveUsgsFetchResult> {
   if (!isSupabaseConfigured || !supabase) {
-    return {
-      state: 'unconfigured',
-      records: [],
-      source: null,
-      recordCount: 0,
-      errorMessage: null,
-    };
+    return emptyResult('unconfigured');
   }
 
   try {
-    const { data: sourceRows, error: sourceError } = await supabase
-      .from('data_sources')
-      .select('id, code, display_name, source_mode, ingestion_status, last_success_at')
-      .eq('code', 'usgs')
-      .maybeSingle();
+    const sources = await fetchConfiguredLiveSources();
+    const sourcesById = buildSourcesById(sources);
+    const source = sources.find((sourceItem) => sourceItem.code === 'usgs') ?? sources[0] ?? null;
+    const sourceIds = sources.map((sourceItem) => sourceItem.id);
 
-    if (sourceError) {
+    if (sourceIds.length === 0) {
       return {
-        state: 'error',
+        state: 'empty',
         records: [],
         source: null,
+        sources: [],
         recordCount: 0,
-        errorMessage: sourceError.message,
+        errorMessage: null,
       };
     }
-
-    const source = normalizeSourceStatus(sourceRows as Record<string, unknown> | null);
 
     const { data: incidentRows, error: incidentsError } = await supabase
       .from('incidents')
       .select(
-        'id, canonical_key, hazard_type, severity, status, integrity_status, data_mode, title, summary, place_name, latitude, longitude, event_time, source_updated_at, last_source_fetched_at, magnitude, depth_km, is_active',
+        'id, primary_source_id, canonical_key, hazard_type, severity, status, integrity_status, data_mode, title, summary, place_name, latitude, longitude, event_time, source_updated_at, last_source_fetched_at, magnitude, depth_km, is_active',
       )
       .eq('data_mode', 'live_source')
-      .eq('hazard_type', 'earthquake')
+      .in('primary_source_id', sourceIds)
       .eq('is_active', true)
       .order('event_time', { ascending: false })
-      .limit(100);
+      .limit(250);
 
     if (incidentsError) {
       return {
         state: 'error',
         records: [],
         source,
+        sources,
         recordCount: 0,
-        errorMessage: incidentsError.message,
+        errorMessage: 'Stored live source records could not be loaded.',
       };
     }
 
-    const records = (incidentRows ?? []).map((row) => normalizeIncident(row as Record<string, unknown>));
+    const records = (incidentRows ?? []).map((row) =>
+      normalizeIncident(row as Record<string, unknown>, sourcesById),
+    );
 
     if (records.length === 0) {
       return {
         state: 'empty',
         records: [],
         source,
+        sources,
         recordCount: 0,
         errorMessage: null,
       };
@@ -229,17 +254,12 @@ async function fetchLiveUsgsIntelligenceFromSupabase(): Promise<LiveUsgsFetchRes
       state: 'success',
       records,
       source,
+      sources,
       recordCount: records.length,
       errorMessage: null,
     };
   } catch {
-    return {
-      state: 'error',
-      records: [],
-      source: null,
-      recordCount: 0,
-      errorMessage: 'Unable to retrieve stored USGS records at this time.',
-    };
+    return emptyResult('error', 'Unable to retrieve stored live source records at this time.');
   }
 }
 

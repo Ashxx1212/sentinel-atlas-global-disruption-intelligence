@@ -6,6 +6,7 @@ const initialState: LiveUsgsFetchResult = {
   state: 'loading',
   records: [],
   source: null,
+  sources: [],
   recordCount: 0,
   errorMessage: null,
 };

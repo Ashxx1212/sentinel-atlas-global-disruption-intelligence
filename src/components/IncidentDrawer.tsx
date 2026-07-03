@@ -62,6 +62,9 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
                 <span className="text-xs text-slate-500">
                   {hazardTypeLabels[incident.hazardType]}
                 </span>
+                <span className={`chip text-[10px] ${incident.dataMode === 'live_source' ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-300' : 'border-warning-500/20 bg-warning-500/5 text-warning-400'}`}>
+                  {incident.dataMode === 'live_source' ? incident.sourceLabel : 'PROTOTYPE FIXTURE'}
+                </span>
               </div>
               <h2 className="mt-2 text-lg font-bold text-slate-100">
                 {incident.title}
@@ -90,7 +93,7 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
               </div>
               <div className="flex items-center gap-2 text-xs text-slate-400">
                 <span className="text-slate-500">Source:</span>
-                <span className="text-cyan-300">{incident.source}</span>
+                <span className="text-cyan-300">{incident.sourceName}</span>
               </div>
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-slate-500">Integrity:</span>
@@ -105,12 +108,20 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
               <div className="mt-4 grid gap-3 rounded-lg border border-cyan-500/15 bg-cyan-500/5 p-3 text-xs text-slate-400">
                 <div className="flex items-center gap-2">
                   <Database className="h-3.5 w-3.5 text-cyan-400" />
-                  <span>Magnitude: {incident.magnitude !== null ? `${incident.magnitude.toFixed(1)} M` : 'Unavailable'}</span>
+                  <span>{incident.sourceLabel}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Layers3 className="h-3.5 w-3.5 text-cyan-400" />
-                  <span>Depth: {incident.depthKm !== null ? `${incident.depthKm.toFixed(1)} km` : 'Unavailable'}</span>
-                </div>
+                {incident.magnitude !== null && (
+                  <div className="flex items-center gap-2">
+                    <Database className="h-3.5 w-3.5 text-cyan-400" />
+                    <span>Magnitude: {incident.magnitude.toFixed(1)} M</span>
+                  </div>
+                )}
+                {incident.depthKm !== null && (
+                  <div className="flex items-center gap-2">
+                    <Layers3 className="h-3.5 w-3.5 text-cyan-400" />
+                    <span>Depth: {incident.depthKm.toFixed(1)} km</span>
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <Clock className="h-3.5 w-3.5 text-cyan-400" />
                   <span>Event time: {incident.eventTime ? formatTimestamp(incident.eventTime) : 'Unavailable'}</span>
@@ -146,7 +157,7 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
                   <p className="text-xs font-medium text-slate-300">Why this is shown</p>
                   <p className="mt-0.5 text-[11px] text-slate-500 leading-relaxed">
                     {incident.dataMode === 'live_source'
-                      ? 'USGS source record. Sentinel Atlas has not independently validated this observation.'
+                      ? `${incident.sourceName} source-backed event metadata. Sentinel Atlas has not independently validated this source observation.`
                       : 'This incident appears because it matches the current map filters. Map position and incident context are illustrative in this prototype.'}
                   </p>
                 </div>
@@ -201,8 +212,8 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
             <div className="mt-4 rounded-lg border border-warning-500/15 bg-warning-500/5 p-3">
               <p className="text-[11px] text-slate-500 leading-relaxed">
                 {incident.dataMode === 'live_source'
-                  ? 'USGS positions are plotted from stored source coordinates. Map styling remains illustrative.'
-                  : 'Map position and incident context are illustrative in this prototype. No live public-source data is ingested.'}
+                  ? 'Source-backed positions are plotted from stored source coordinates. Map styling remains illustrative.'
+                  : 'Map position and incident context are illustrative for prototype fixtures.'}
               </p>
             </div>
           </div>
