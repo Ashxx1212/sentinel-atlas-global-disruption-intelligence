@@ -429,3 +429,8 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/sync-eonet-events/deno.json"
 entrypoint = "./functions/sync-eonet-events/index.ts"
+[functions.sync-gdacs-events]
+enabled = true
+verify_jwt = false
+import_map = "./functions/sync-gdacs-events/deno.json"
+entrypoint = "./functions/sync-gdacs-events/index.ts"
