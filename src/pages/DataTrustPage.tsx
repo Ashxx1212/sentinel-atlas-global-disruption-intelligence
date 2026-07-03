@@ -9,11 +9,7 @@ import type { LiveUsgsSourceStatus } from '../types/liveIntelligence';
 // Ingestion health timeline data (mock)
 const timelineEvents = [
   { time: '06:45Z', label: 'Open-Meteo fixture refreshed', status: 'operational' },
-  { time: '06:42Z', label: 'USGS fixture refreshed', status: 'operational' },
-  { time: '06:38Z', label: 'NASA EONET fixture refreshed', status: 'operational' },
-  { time: '06:30Z', label: 'GDACS fixture refreshed (degraded)', status: 'degraded' },
-  { time: '05:30Z', label: 'GDACS simulated partial timeout', status: 'degraded' },
-  { time: '04:12Z', label: 'USGS simulated seismic event', status: 'operational' },
+  { time: '04:12Z', label: 'Prototype seismic event simulated', status: 'operational' },
   { time: '03:40Z', label: 'Open-Meteo simulated forecast update', status: 'operational' },
   { time: '02:00Z', label: 'Open-Meteo simulated weather event', status: 'operational' },
 ];
@@ -46,12 +42,14 @@ function formatTimestamp(value: string | null): string {
 function liveSourceLabel(code: string, fallbackName: string): string {
   if (code === 'usgs') return 'USGS Earthquake Catalog';
   if (code === 'eonet') return 'NASA EONET';
+  if (code === 'gdacs') return 'GDACS';
   return fallbackName || code.toUpperCase();
 }
 
 function liveSourceSubtitle(code: string): string {
   if (code === 'usgs') return 'U.S. Geological Survey';
   if (code === 'eonet') return 'NASA Earth Observatory Natural Event Tracker';
+  if (code === 'gdacs') return 'Global Disaster Alert and Coordination System';
   return 'Live source-backed records';
 }
 
@@ -102,7 +100,9 @@ function LiveSourceCard({
         <span className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">{source.ingestion_status ?? 'status unavailable'}</span>
       </div>
       <p className="mt-3 text-xs text-slate-400 leading-relaxed">
-        Source-backed event metadata stored in Sentinel Atlas.
+        {source.code === 'gdacs'
+          ? 'GDACS awareness and coordination metadata. Not an official emergency warning.'
+          : 'Source-backed event metadata stored in Sentinel Atlas.'}
       </p>
       <p className="mt-2 text-xs text-slate-500 leading-relaxed">
         Sentinel Atlas does not independently validate provider observations.
