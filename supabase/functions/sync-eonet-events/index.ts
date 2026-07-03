@@ -89,6 +89,36 @@ type ExistingIncidentSourceRow = {
   source_updated_at?: string | null;
 };
 
+type ClosedPartitionOutcome =
+  | "accepted"
+  | "split"
+  | "minimum_window_saturated"
+  | "request_cap_reached"
+  | "time_budget_reached";
+
+type ClosedPartitionMetadata = {
+  category: EonetCategoryId;
+  start: string;
+  end: string;
+  records_returned: number;
+  outcome: ClosedPartitionOutcome;
+};
+
+type EonetFetchState = {
+  allEvents: EonetEvent[];
+  endpoints: string[];
+  providerWarnings: string[];
+  providerRequestCount: number;
+  fetchStartedAt: number;
+  closedPartitions: ClosedPartitionMetadata[];
+  saturatedOpenCategories: EonetCategoryId[];
+  closedCategoriesRequiringPartitions: EonetCategoryId[];
+  saturatedClosedCategories: EonetCategoryId[];
+  closedRangeStart: string;
+  closedRangeEnd: string;
+  providerFetchStopped: boolean;
+};
+
 const EONET_EVENTS_URL = "https://eonet.gsfc.nasa.gov/api/v3/events";
 const EONET_CATEGORY_PRIORITY: readonly EonetCategoryId[] = [
   "wildfires",
@@ -98,11 +128,13 @@ const EONET_CATEGORY_PRIORITY: readonly EonetCategoryId[] = [
 ];
 
 const INCLUDED_CATEGORIES = EONET_CATEGORY_PRIORITY;
-const CATEGORY_QUERY = INCLUDED_CATEGORIES.join(",");
 const CLOSED_LOOKBACK_DAYS = 45;
 const RESULT_LIMIT = 100;
+const MAX_EONET_PROVIDER_REQUESTS = 20;
+const FETCH_BUDGET_MS = 95_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const SOURCE_CODE = "eonet";
+const CLOSED_PARTITION_STRATEGY = "category-first-event-date-bisection";
 
 const jsonHeaders = {
   "Content-Type": "application/json",
@@ -139,6 +171,44 @@ function timestampFromIso(value: string | null | undefined): string | null {
   }
 
   return date.toISOString();
+}
+
+function utcDateString(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function dateFromUtcDateString(value: string): Date {
+  const parts = value.split("-").map(Number);
+  const year = parts[0] ?? 0;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
+
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function addUtcDays(value: string, days: number): string {
+  const date = dateFromUtcDateString(value);
+  date.setUTCDate(date.getUTCDate() + days);
+
+  return utcDateString(date);
+}
+
+function midpointUtcDate(start: string, end: string): string {
+  const startTime = dateFromUtcDateString(start).getTime();
+  const endTime = dateFromUtcDateString(end).getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const daySpan = Math.floor((endTime - startTime) / dayMs);
+
+  return addUtcDays(start, Math.floor(daySpan / 2));
+}
+
+function closedEventDateRange(referenceIso: string): { start: string; end: string } {
+  const end = utcDateString(new Date(referenceIso));
+
+  return {
+    start: addUtcDays(end, -(CLOSED_LOOKBACK_DAYS - 1)),
+    end,
+  };
 }
 
 function geometryTimeValue(geometry: EonetGeometry): number {
@@ -486,37 +556,277 @@ function meaningfulChangeOccurred(
   );
 }
 
-async function fetchEonetSourceRecords(): Promise<{
+function addProviderWarning(state: EonetFetchState, warning: string): void {
+  if (!state.providerWarnings.includes(warning)) {
+    state.providerWarnings.push(warning);
+  }
+}
+
+function addUniqueCategory(categories: EonetCategoryId[], category: EonetCategoryId): void {
+  if (!categories.includes(category)) {
+    categories.push(category);
+  }
+}
+
+function stopProviderFetches(
+  state: EonetFetchState,
+  reason: "request_cap_reached" | "time_budget_reached",
+  description: string,
+): void {
+  if (state.providerFetchStopped) {
+    return;
+  }
+
+  state.providerFetchStopped = true;
+
+  if (reason === "request_cap_reached") {
+    addProviderWarning(
+      state,
+      `EONET provider request cap of ${MAX_EONET_PROVIDER_REQUESTS} reached before fetching ${description}; preserved records fetched so far.`,
+    );
+    return;
+  }
+
+  addProviderWarning(
+    state,
+    `EONET fetch time budget of ${FETCH_BUDGET_MS} ms would be exceeded before fetching ${description}; preserved records fetched so far.`,
+  );
+}
+
+function canStartProviderRequest(
+  state: EonetFetchState,
+  description: string,
+  skippedPartition?: { category: EonetCategoryId; start: string; end: string },
+): boolean {
+  if (state.providerFetchStopped) {
+    return false;
+  }
+
+  if (state.providerRequestCount >= MAX_EONET_PROVIDER_REQUESTS) {
+    stopProviderFetches(state, "request_cap_reached", description);
+    if (skippedPartition) {
+      state.closedPartitions.push({
+        ...skippedPartition,
+        records_returned: 0,
+        outcome: "request_cap_reached",
+      });
+    }
+    return false;
+  }
+
+  const elapsedMs = Date.now() - state.fetchStartedAt;
+  if (elapsedMs + REQUEST_TIMEOUT_MS > FETCH_BUDGET_MS) {
+    stopProviderFetches(state, "time_budget_reached", description);
+    if (skippedPartition) {
+      state.closedPartitions.push({
+        ...skippedPartition,
+        records_returned: 0,
+        outcome: "time_budget_reached",
+      });
+    }
+    return false;
+  }
+
+  return true;
+}
+
+async function fetchTrackedEonetEvents(
+  state: EonetFetchState,
+  params: Record<string, string>,
+  description: string,
+  skippedPartition?: { category: EonetCategoryId; start: string; end: string },
+): Promise<{ endpoint: string; events: EonetEvent[] } | null> {
+  if (!canStartProviderRequest(state, description, skippedPartition)) {
+    return null;
+  }
+
+  const result = await fetchEonetEvents(params);
+  state.providerRequestCount += 1;
+  state.endpoints.push(result.endpoint);
+
+  return result;
+}
+
+async function fetchClosedEventDatePartition(
+  state: EonetFetchState,
+  category: EonetCategoryId,
+  start: string,
+  end: string,
+): Promise<EonetEvent[]> {
+  const result = await fetchTrackedEonetEvents(
+    state,
+    {
+      category,
+      status: "closed",
+      start,
+      end,
+      limit: String(RESULT_LIMIT),
+    },
+    `closed EONET event-date partition for ${category} (${start}..${end})`,
+    { category, start, end },
+  );
+
+  if (!result) {
+    return [];
+  }
+
+  const events = [...result.events];
+  if (result.events.length < RESULT_LIMIT) {
+    state.closedPartitions.push({
+      category,
+      start,
+      end,
+      records_returned: result.events.length,
+      outcome: "accepted",
+    });
+
+    return events;
+  }
+
+  if (start === end) {
+    state.closedPartitions.push({
+      category,
+      start,
+      end,
+      records_returned: result.events.length,
+      outcome: "minimum_window_saturated",
+    });
+    addUniqueCategory(state.saturatedClosedCategories, category);
+    addProviderWarning(
+      state,
+      `Closed EONET event-date partition for ${category} (${start}) returned the configured limit; additional records may be omitted.`,
+    );
+
+    return events;
+  }
+
+  state.closedPartitions.push({
+    category,
+    start,
+    end,
+    records_returned: result.events.length,
+    outcome: "split",
+  });
+
+  const midpoint = midpointUtcDate(start, end);
+  const nextStart = addUtcDays(midpoint, 1);
+  const leftEvents = await fetchClosedEventDatePartition(state, category, start, midpoint);
+  const rightEvents = state.providerFetchStopped
+    ? []
+    : await fetchClosedEventDatePartition(state, category, nextStart, end);
+
+  return [...events, ...leftEvents, ...rightEvents];
+}
+
+async function fetchEonetSourceRecords(referenceIso: string): Promise<{
   allEvents: EonetEvent[];
   endpoints: string[];
   providerWarnings: string[];
+  providerRequestCount: number;
+  closedRangeStart: string;
+  closedRangeEnd: string;
+  saturatedOpenCategories: EonetCategoryId[];
+  closedCategoriesRequiringPartitions: EonetCategoryId[];
+  saturatedClosedCategories: EonetCategoryId[];
+  closedPartitions: ClosedPartitionMetadata[];
 }> {
-  const openResult = await fetchEonetEvents({
-    category: CATEGORY_QUERY,
-    status: "open",
-    limit: String(RESULT_LIMIT),
-  });
+  const closedRange = closedEventDateRange(referenceIso);
+  const state: EonetFetchState = {
+    allEvents: [],
+    endpoints: [],
+    providerWarnings: [],
+    providerRequestCount: 0,
+    fetchStartedAt: Date.now(),
+    closedPartitions: [],
+    saturatedOpenCategories: [],
+    closedCategoriesRequiringPartitions: [],
+    saturatedClosedCategories: [],
+    closedRangeStart: closedRange.start,
+    closedRangeEnd: closedRange.end,
+    providerFetchStopped: false,
+  };
 
-  const closedResult = await fetchEonetEvents({
-    category: CATEGORY_QUERY,
-    status: "closed",
-    days: String(CLOSED_LOOKBACK_DAYS),
-    limit: String(RESULT_LIMIT),
-  });
+  for (const category of INCLUDED_CATEGORIES) {
+    const openResult = await fetchTrackedEonetEvents(
+      state,
+      {
+        category,
+        status: "open",
+        limit: String(RESULT_LIMIT),
+      },
+      `open EONET category ${category}`,
+    );
 
-  const providerWarnings: string[] = [];
-  if (openResult.events.length >= RESULT_LIMIT) {
-    providerWarnings.push("Open EONET query returned the configured limit; additional open records may be omitted.");
+    if (!openResult) {
+      break;
+    }
+
+    state.allEvents.push(...openResult.events);
+    if (openResult.events.length >= RESULT_LIMIT) {
+      addUniqueCategory(state.saturatedOpenCategories, category);
+      addProviderWarning(
+        state,
+        `Open EONET category ${category} returned the configured limit; additional open records may be omitted.`,
+      );
+    }
   }
 
-  if (closedResult.events.length >= RESULT_LIMIT) {
-    providerWarnings.push("Closed EONET query returned the configured limit; additional recently closed records may be omitted.");
+  for (const category of INCLUDED_CATEGORIES) {
+    if (state.providerFetchStopped) {
+      break;
+    }
+
+    const closedResult = await fetchTrackedEonetEvents(
+      state,
+      {
+        category,
+        status: "closed",
+        days: String(CLOSED_LOOKBACK_DAYS),
+        limit: String(RESULT_LIMIT),
+      },
+      `closed EONET days query for ${category}`,
+    );
+
+    if (!closedResult) {
+      break;
+    }
+
+    state.allEvents.push(...closedResult.events);
+    if (closedResult.events.length < RESULT_LIMIT) {
+      continue;
+    }
+
+    addUniqueCategory(state.closedCategoriesRequiringPartitions, category);
+    const midpoint = midpointUtcDate(closedRange.start, closedRange.end);
+    const nextStart = addUtcDays(midpoint, 1);
+    const firstPartitionEvents = await fetchClosedEventDatePartition(
+      state,
+      category,
+      closedRange.start,
+      midpoint,
+    );
+    const secondPartitionEvents = state.providerFetchStopped
+      ? []
+      : await fetchClosedEventDatePartition(
+        state,
+        category,
+        nextStart,
+        closedRange.end,
+      );
+    state.allEvents.push(...firstPartitionEvents, ...secondPartitionEvents);
   }
 
   return {
-    allEvents: [...openResult.events, ...closedResult.events],
-    endpoints: [openResult.endpoint, closedResult.endpoint],
-    providerWarnings,
+    allEvents: state.allEvents,
+    endpoints: state.endpoints,
+    providerWarnings: state.providerWarnings,
+    providerRequestCount: state.providerRequestCount,
+    closedRangeStart: state.closedRangeStart,
+    closedRangeEnd: state.closedRangeEnd,
+    saturatedOpenCategories: state.saturatedOpenCategories,
+    closedCategoriesRequiringPartitions: state.closedCategoriesRequiringPartitions,
+    saturatedClosedCategories: state.saturatedClosedCategories,
+    closedPartitions: state.closedPartitions,
   };
 }
 
@@ -591,7 +901,18 @@ export default {
 
       ingestionRunId = ingestionRun.id;
 
-      const { allEvents, endpoints, providerWarnings } = await fetchEonetSourceRecords();
+      const {
+        allEvents,
+        endpoints,
+        providerWarnings,
+        providerRequestCount,
+        closedRangeStart,
+        closedRangeEnd,
+        saturatedOpenCategories,
+        closedCategoriesRequiringPartitions,
+        saturatedClosedCategories,
+        closedPartitions,
+      } = await fetchEonetSourceRecords(fetchedAt);
       const dedupedEvents = dedupeByEventId(allEvents);
       const { normalizedEvents, skippedInvalidCount, skippedNoPointCount } = normalizeEvents(dedupedEvents);
       const canonicalKeys = normalizedEvents.map((event) => event.canonicalKey);
@@ -832,6 +1153,16 @@ const incidentUpdateCount = changedEvents.length;
             provider_warnings: providerWarnings,
             skipped_invalid_records: skippedInvalidCount,
             skipped_no_point_records: skippedNoPointCount,
+            provider_request_count: providerRequestCount,
+            max_provider_requests: MAX_EONET_PROVIDER_REQUESTS,
+            fetch_budget_ms: FETCH_BUDGET_MS,
+            closed_partition_strategy: CLOSED_PARTITION_STRATEGY,
+            closed_range_start: closedRangeStart,
+            closed_range_end: closedRangeEnd,
+            saturated_open_categories: saturatedOpenCategories,
+            closed_categories_requiring_partitions: closedCategoriesRequiringPartitions,
+            saturated_closed_categories: saturatedClosedCategories,
+            closed_partitions: closedPartitions,
           },
         })
         .eq("id", ingestionRunId);
