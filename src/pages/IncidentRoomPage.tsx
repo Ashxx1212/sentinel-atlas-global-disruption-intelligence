@@ -78,6 +78,12 @@ function getSourceById(sourceId: string) {
   return mockSources.find((s) => s.id === sourceId);
 }
 
+function getGdacsLiveSourceRole(incident: HybridIncident) {
+  return incident.dataMode === 'live_source' && incident.sourceCode === 'gdacs'
+    ? 'GDACS awareness and coordination metadata'
+    : null;
+}
+
 // ── Cinematic incident visual ───────────────────────────────
 
 function IncidentVisual({ incident }: { incident: HybridIncident }) {
@@ -167,6 +173,7 @@ function IncidentVisual({ incident }: { incident: HybridIncident }) {
 
 function KeyFactsGrid({ incident }: { incident: HybridIncident }) {
   const source = getSourceById(incident.sourceId);
+  const gdacsLiveSourceRole = getGdacsLiveSourceRole(incident);
   const facts = [
     { label: 'Severity', value: incident.severity, badge: true, badgeType: 'severity' },
     { label: 'Hazard Type', value: hazardTypeLabels[incident.hazardType] },
@@ -197,13 +204,18 @@ function KeyFactsGrid({ incident }: { incident: HybridIncident }) {
           </div>
         </div>
       ))}
-      {source && (
+      {gdacsLiveSourceRole ? (
+        <div className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-3">
+          <p className="text-xs text-slate-500">Source Role</p>
+          <p className="mt-1 text-sm text-slate-200">{gdacsLiveSourceRole}</p>
+        </div>
+      ) : source ? (
         <div className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-3">
           <p className="text-xs text-slate-500">Source Role</p>
           <p className="mt-1 text-sm text-slate-200">{source.dataUseRole}</p>
         </div>
-      )}
-      {incident.dataMode === 'live_source' && !source && (
+      ) : null}
+      {incident.dataMode === 'live_source' && !source && !gdacsLiveSourceRole && (
         <div className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-3">
           <p className="text-xs text-slate-500">Source Role</p>
           <p className="mt-1 text-sm text-slate-200">Source-backed event metadata</p>
@@ -220,6 +232,8 @@ function EvidenceLedger({ incident }: { incident: HybridIncident }) {
     <div className="space-y-3">
       {incident.evidence.map((ev) => {
         const source = mockSources.find((s) => s.shortName === ev.source);
+        const gdacsLiveSourceRole = getGdacsLiveSourceRole(incident);
+        const sourceRole = gdacsLiveSourceRole ?? source?.dataUseRole;
         const hasSourceUrl = ev.url.trim().length > 0;
         return (
           <div key={ev.id} className="panel panel-hover p-4 transition-all">
@@ -236,10 +250,10 @@ function EvidenceLedger({ incident }: { incident: HybridIncident }) {
                       <Server className="h-3 w-3" />
                       {ev.source}
                     </span>
-                    {source && (
+                    {sourceRole && (
                       <>
                         <span className="text-slate-600">·</span>
-                        <span>{source.dataUseRole}</span>
+                        <span>{sourceRole}</span>
                       </>
                     )}
                     <span className="text-slate-600">·</span>

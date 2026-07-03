@@ -57,7 +57,7 @@ export function MockMapWorkspace({
     <div
       className={`relative overflow-hidden rounded-xl border border-ink-700/60 bg-ink-900 ${className}`}
       role="img"
-      aria-label="Illustrative world map with simulated incident markers in Prototype Mode"
+      aria-label="Illustrative world map with live source records and prototype fixture markers"
     >
       {/* Grid texture */}
       <div className="absolute inset-0 grid-texture opacity-60" />
@@ -193,7 +193,7 @@ export function MockMapWorkspace({
         LAT 90° / LNG 180°
       </div>
       <div className="pointer-events-none absolute top-2 left-3 font-mono text-[10px] text-cyan-500/40">
-        MOCK MAP · PROTOTYPE
+        ILLUSTRATIVE MAP · LIVE SOURCE RECORDS + PROTOTYPE FIXTURES
       </div>
     </div>
   );

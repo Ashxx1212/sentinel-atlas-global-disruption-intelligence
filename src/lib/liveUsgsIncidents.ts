@@ -8,7 +8,7 @@ import type {
   LiveUsgsSourceStatus,
 } from '../types/liveIntelligence';
 
-const LIVE_SOURCE_CODES = ['usgs', 'eonet'] as const;
+const LIVE_SOURCE_CODES = ['usgs', 'eonet', 'gdacs'] as const;
 
 let cachedLiveUsgsResult: LiveUsgsFetchResult | null = null;
 let inFlightLiveUsgsRequest: Promise<LiveUsgsFetchResult> | null = null;

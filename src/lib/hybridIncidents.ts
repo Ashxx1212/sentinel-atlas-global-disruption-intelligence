@@ -29,6 +29,9 @@ function toDisplayHazard(value: string | null, sourceCode: string | null): Hazar
   if (value === 'earthquake' || value === 'wildfire' || value === 'flood' || value === 'cyclone' || value === 'volcano' || value === 'severe-weather') {
     return value;
   }
+  if (sourceCode === 'gdacs') {
+    return 'cyclone';
+  }
   return sourceCode === 'usgs' ? 'earthquake' : 'severe-weather';
 }
 
@@ -86,6 +89,10 @@ export function toLiveSourceRecordLabel(sourceCode: string | null, sourceName: s
 
   if (sourceCode === 'eonet') {
     return 'SOURCE-BACKED · NASA EONET';
+  }
+
+  if (sourceCode === 'gdacs') {
+    return 'SOURCE-BACKED · GDACS';
   }
 
   const normalizedSourceName = sourceName?.trim();

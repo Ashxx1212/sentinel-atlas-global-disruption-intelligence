@@ -111,25 +111,25 @@ export function CommandCentrePage() {
     }
 
     return sources
-      .map((source) => source.code === 'eonet' ? 'NASA EONET' : source.code === 'usgs' ? 'USGS Earthquake Catalog' : source.display_name)
+      .map((source) => source.code === 'gdacs' ? 'GDACS' : source.code === 'eonet' ? 'NASA EONET' : source.code === 'usgs' ? 'USGS Earthquake Catalog' : source.display_name)
       .join(' + ');
   }, [sources]);
   const liveSourceCodes = useMemo(() => new Set(sources.map((source) => source.code)), [sources]);
-  const sourceTotal = useMemo(
-    () => sources.length + mockSources.filter((source) => !liveSourceCodes.has(source.id)).length,
-    [liveSourceCodes, sources],
+  const prototypeSourceCount = useMemo(
+    () => mockSources.filter((source) => !liveSourceCodes.has(source.id)).length,
+    [liveSourceCodes],
+  );
+  const operationalLiveSourceCount = useMemo(
+    () =>
+      sources.filter(
+        (source) => source.source_mode === 'live_source' && source.ingestion_status === 'operational',
+      ).length,
+    [sources],
   );
 
   const activeCount = useMemo(() => commandMapIncidents.filter((i) => i.status === 'active').length, [commandMapIncidents]);
   const criticalCount = useMemo(() => commandMapIncidents.filter((i) => i.severity === 'critical').length, [commandMapIncidents]);
   const watchedAffected = 3;
-  const operationalSources = useMemo(() => {
-    const operationalLiveSources = sources.filter((source) => source.ingestion_status === 'operational').length;
-    const operationalFixtureSources = mockSources.filter((source) => !liveSourceCodes.has(source.id) && source.health === 'operational').length;
-
-    return operationalLiveSources + operationalFixtureSources;
-  }, [liveSourceCodes, sources]);
-
   const sortedStream = useMemo(() => [...mockIntelligenceStream].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   ), []);
@@ -189,14 +189,15 @@ export function CommandCentrePage() {
           className="text-left"
           aria-label="View source health"
         >
-          <MetricCard
-            label="Source Health"
-            value={`${operationalSources}/${sourceTotal}`}
-            icon={Server}
-            accent="high"
-            sublabel="Sources operational"
-            trend="1 source degraded"
-          />
+              <MetricCard
+                label="Source Health"
+                value={`${operationalLiveSourceCount} live sources`}
+                icon={Server}
+                accent="high"
+                sublabel={`operational · ${prototypeSourceCount} prototype fixture${
+                  prototypeSourceCount === 1 ? '' : 's'
+                }`}
+              />
         </button>
       </div>
 
@@ -205,7 +206,7 @@ export function CommandCentrePage() {
           <div className="max-w-2xl">
             <SectionHeader title="LIVE SOURCE RECORDS" icon={Activity} />
             <p className="mt-2 text-sm text-slate-400 leading-relaxed">
-              Stored USGS and NASA EONET records are surfaced here as a read-only layer inside Sentinel Atlas. The panel does not independently validate source observations.
+              Stored USGS, NASA EONET, and GDACS records are surfaced here as a read-only layer inside Sentinel Atlas. GDACS provides awareness and coordination metadata, not official emergency warnings.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -411,14 +412,16 @@ export function CommandCentrePage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-100">
-                    {source.code === 'eonet' ? 'NASA EONET' : source.code === 'usgs' ? 'USGS Earthquake Catalog' : source.display_name}
+                    {source.code === 'gdacs' ? 'GDACS' : source.code === 'eonet' ? 'NASA EONET' : source.code === 'usgs' ? 'USGS Earthquake Catalog' : source.display_name}
                   </h3>
                   <p className="mt-0.5 text-xs text-slate-500">Live source-backed records</p>
                 </div>
                 <span className={`h-2.5 w-2.5 rounded-full ${source.ingestion_status === 'operational' ? 'bg-success-500' : source.ingestion_status === 'degraded' ? 'bg-warning-500' : 'bg-slate-500'}`} />
               </div>
               <p className="mt-3 text-xs text-slate-400 leading-relaxed">
-                Status is tracked independently for this source. Sentinel Atlas does not independently validate provider observations.
+                {source.code === 'gdacs'
+                  ? 'GDACS awareness and coordination metadata. Not an official emergency warning.'
+                  : 'Status is tracked independently for this source. Sentinel Atlas does not independently validate provider observations.'}
               </p>
               <div className="mt-3 border-t border-ink-700/60 pt-3 text-xs">
                 <div className="flex items-center justify-between">

@@ -35,6 +35,7 @@ interface SearchResult {
 function liveSourceLabel(code: string, fallbackName: string): string {
   if (code === 'usgs') return 'USGS Earthquake Catalog';
   if (code === 'eonet') return 'NASA EONET';
+  if (code === 'gdacs') return 'GDACS';
   return fallbackName || code.toUpperCase();
 }
 
@@ -59,7 +60,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
       ? profile?.display_name?.trim() || user?.email?.split('@')[0] || 'Signed-in analyst'
       : 'Preview analyst';
   const liveSources = useMemo(
-    () => sources.filter((source) => source.source_mode === 'live_source' || source.code === 'usgs' || source.code === 'eonet'),
+    () => sources.filter((source) => source.source_mode === 'live_source' || source.code === 'usgs' || source.code === 'eonet' || source.code === 'gdacs'),
     [sources],
   );
   const liveSourceCodes = useMemo(() => new Set(liveSources.map((source) => source.code)), [liveSources]);
