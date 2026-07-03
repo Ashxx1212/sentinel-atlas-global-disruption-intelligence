@@ -64,7 +64,7 @@ export function IncidentRoomsPage() {
     <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="Incident Rooms"
-        subtitle="Detailed rooms for every tracked disruption, with timelines, evidence, and context. Uses prototype fixture data."
+        subtitle="Detailed rooms for tracked disruptions, with source-backed timelines, evidence, and prototype context."
       >
         <PrototypeNotice />
       </PageHeader>
@@ -157,7 +157,7 @@ export function IncidentRoomsPage() {
         <EmptyState
           icon={DoorClosed}
           title="No incidents found"
-          message="No prototype incidents match your current filters. Try adjusting your search or filter criteria."
+          message="No incidents match your current filters. Try adjusting your search or filter criteria."
         />
       ) : !isInitialLoading ? (
         <div className="stagger-children grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

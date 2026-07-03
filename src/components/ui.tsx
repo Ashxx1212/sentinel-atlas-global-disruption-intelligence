@@ -1,7 +1,7 @@
 import { Info } from 'lucide-react';
 
 export function PrototypeNotice({
-  text = 'This interface uses local prototype fixtures. No live public-source data is ingested in this build.',
+  text = 'Source-backed records and local prototype fixtures are clearly labelled. Sentinel Atlas does not independently validate provider observations.',
   className = '',
 }: {
   text?: string;
@@ -13,7 +13,7 @@ export function PrototypeNotice({
     >
       <Info className="h-3.5 w-3.5 flex-shrink-0 text-warning-400" />
       <p className="text-xs text-slate-400">
-        <span className="font-medium text-warning-400">Prototype Fixture ·</span> {text}
+        <span className="font-medium text-warning-400">Data Mode ·</span> {text}
       </p>
     </div>
   );

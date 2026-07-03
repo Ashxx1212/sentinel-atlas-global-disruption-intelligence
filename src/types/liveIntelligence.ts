@@ -11,6 +11,9 @@ export interface LiveUsgsSourceStatus {
 
 export interface LiveUsgsIncidentRecord {
   id: string;
+  primary_source_id: string | null;
+  source_code: string | null;
+  source_display_name: string | null;
   canonical_key: string | null;
   hazard_type: string | null;
   severity: string | null;
@@ -64,6 +67,7 @@ export interface LiveUsgsFetchResult {
   state: LiveUsgsState;
   records: LiveUsgsIncidentRecord[];
   source: LiveUsgsSourceStatus | null;
+  sources: LiveUsgsSourceStatus[];
   recordCount: number;
   errorMessage: string | null;
 }

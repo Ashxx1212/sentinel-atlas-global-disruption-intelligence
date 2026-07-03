@@ -32,7 +32,7 @@ import { MockMapWorkspace } from '../components/MockMapWorkspace';
 import { IncidentDrawer } from '../components/IncidentDrawer';
 import { PageHeader, PrototypeNotice, SectionHeader } from '../components/ui';
 import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
-import { buildHybridIncidentFromFixture } from '../lib/hybridIncidents';
+import { buildHybridIncidentFromFixture, buildHybridIncidentFromLiveRecord } from '../lib/hybridIncidents';
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -86,14 +86,49 @@ function statusTone(state: string): string {
 export function CommandCentrePage() {
   const navigate = useNavigate();
   const [drawerIncident, setDrawerIncident] = useState<HybridIncident | null>(null);
-  const { state, source, recordCount, errorMessage, refresh } = useLiveUsgsIncidents();
+  const { state, records, sources, recordCount, errorMessage, refresh } = useLiveUsgsIncidents();
 
-  const commandMapIncidents = useMemo<HybridIncident[]>(() => mockIncidents.map(buildHybridIncidentFromFixture), []);
+  const fixtureMapIncidents = useMemo<HybridIncident[]>(() => mockIncidents.map(buildHybridIncidentFromFixture), []);
+  const liveMapIncidents = useMemo<HybridIncident[]>(
+    () => records.map((record) => buildHybridIncidentFromLiveRecord(record)),
+    [records],
+  );
+  const commandMapIncidents = useMemo<HybridIncident[]>(
+    () => [...fixtureMapIncidents, ...liveMapIncidents],
+    [fixtureMapIncidents, liveMapIncidents],
+  );
+  const latestLiveSourceSuccess = useMemo(() => {
+    const timestamps = sources
+      .map((source) => source.last_success_at)
+      .filter((value): value is string => Boolean(value))
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
 
-  const activeCount = useMemo(() => mockIncidents.filter((i) => i.status === 'active').length, []);
-  const criticalCount = useMemo(() => mockIncidents.filter((i) => i.severity === 'critical').length, []);
+    return timestamps[0] ?? null;
+  }, [sources]);
+  const sourceSummary = useMemo(() => {
+    if (sources.length === 0) {
+      return 'LIVE SOURCE RECORDS';
+    }
+
+    return sources
+      .map((source) => source.code === 'eonet' ? 'NASA EONET' : source.code === 'usgs' ? 'USGS Earthquake Catalog' : source.display_name)
+      .join(' + ');
+  }, [sources]);
+  const liveSourceCodes = useMemo(() => new Set(sources.map((source) => source.code)), [sources]);
+  const sourceTotal = useMemo(
+    () => sources.length + mockSources.filter((source) => !liveSourceCodes.has(source.id)).length,
+    [liveSourceCodes, sources],
+  );
+
+  const activeCount = useMemo(() => commandMapIncidents.filter((i) => i.status === 'active').length, [commandMapIncidents]);
+  const criticalCount = useMemo(() => commandMapIncidents.filter((i) => i.severity === 'critical').length, [commandMapIncidents]);
   const watchedAffected = 3;
-  const operationalSources = useMemo(() => mockSources.filter((s) => s.health === 'operational').length, []);
+  const operationalSources = useMemo(() => {
+    const operationalLiveSources = sources.filter((source) => source.ingestion_status === 'operational').length;
+    const operationalFixtureSources = mockSources.filter((source) => !liveSourceCodes.has(source.id) && source.health === 'operational').length;
+
+    return operationalLiveSources + operationalFixtureSources;
+  }, [liveSourceCodes, sources]);
 
   const sortedStream = useMemo(() => [...mockIntelligenceStream].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -103,7 +138,7 @@ export function CommandCentrePage() {
     <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="Global Disruption Overview"
-        subtitle="Illustrative synthesis of active hazards, source health, and intelligence stream from prototype fixtures."
+        subtitle="Synthesis of active hazards, source health, live source records, and prototype context."
       >
         <PrototypeNotice />
       </PageHeader>
@@ -156,7 +191,7 @@ export function CommandCentrePage() {
         >
           <MetricCard
             label="Source Health"
-            value={`${operationalSources}/${mockSources.length}`}
+            value={`${operationalSources}/${sourceTotal}`}
             icon={Server}
             accent="high"
             sublabel="Sources operational"
@@ -168,9 +203,9 @@ export function CommandCentrePage() {
       <div className="mt-6 panel ambient-sweep-bg relative overflow-hidden p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
-            <SectionHeader title="USGS Earthquake Layer" icon={Activity} />
+            <SectionHeader title="LIVE SOURCE RECORDS" icon={Activity} />
             <p className="mt-2 text-sm text-slate-400 leading-relaxed">
-              Stored USGS earthquake records are surfaced here as a read-only layer inside Sentinel Atlas. The panel does not independently validate source observations.
+              Stored USGS and NASA EONET records are surfaced here as a read-only layer inside Sentinel Atlas. The panel does not independently validate source observations.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -181,7 +216,7 @@ export function CommandCentrePage() {
               disabled={state === 'loading'}
             >
               <RefreshCw className={`h-4 w-4 ${state === 'loading' ? 'animate-spin' : ''}`} />
-              {state === 'loading' ? 'Refreshing stored layer...' : 'Refresh stored layer'}
+              {state === 'loading' ? 'Refreshing live source records...' : 'Refresh live source records'}
             </button>
             <Link to="/global-map" className="btn-primary">
               <MapPin className="h-4 w-4" />
@@ -213,30 +248,34 @@ export function CommandCentrePage() {
             <div className="rounded-xl border border-ink-700/70 bg-ink-850/50 p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
                 {state === 'success' ? <CheckCircle2 className="h-4 w-4 text-success-400" /> : state === 'error' ? <AlertTriangle className="h-4 w-4 text-error-400" /> : state === 'empty' ? <DatabaseZap className="h-4 w-4 text-slate-400" /> : <AlertTriangle className="h-4 w-4 text-warning-400" />}
-                <span>{state === 'success' ? `${source?.display_name ?? 'USGS'} connected` : state === 'unconfigured' ? 'Source connection unavailable' : state === 'empty' ? 'No stored records currently available' : state === 'error' ? 'Stored layer unavailable' : 'Retrieving stored USGS source records'}</span>
+                <span>{state === 'success' ? `${sourceSummary} connected` : state === 'unconfigured' ? 'Source connection unavailable' : state === 'empty' ? 'No active stored records currently available' : state === 'error' ? 'Stored layer unavailable' : 'Retrieving stored live source records'}</span>
               </div>
               <p className={`mt-3 text-sm ${statusTone(state)}`}>
-                {state === 'success' && source?.source_mode === 'live_source' && source?.ingestion_status === 'operational'
+                {state === 'success' && sources.some((source) => source.source_mode === 'live_source' && source.ingestion_status === 'operational')
                   ? 'Stored source records are available from the latest connected ingestion snapshot.'
                   : state === 'success'
                     ? 'Stored source records are available, but the current source status is not marked operational.'
                     : state === 'empty'
-                      ? 'No active stored USGS earthquake records are currently available in Sentinel Atlas.'
+                      ? 'No active stored live source records are currently available in Sentinel Atlas.'
                       : state === 'unconfigured'
                         ? 'Supabase is not configured in this browser session, so the layer remains gracefully unavailable.'
                         : state === 'error'
                           ? errorMessage ?? 'The stored layer could not be loaded.'
-                          : 'Retrieving the latest stored USGS source records for this view.'}
+                          : 'Retrieving the latest stored live source records for this view.'}
               </p>
               <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-400">
                 <span className="chip border-cyan-500/20 bg-cyan-500/10 text-cyan-300">{recordCount} active stored record{recordCount === 1 ? '' : 's'}</span>
-                <span className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">{source?.ingestion_status ? source.ingestion_status : 'status unavailable'}</span>
+                {sources.map((source) => (
+                  <span key={source.id} className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">
+                    {source.code.toUpperCase()}: {source.ingestion_status ?? 'status unavailable'}
+                  </span>
+                ))}
               </div>
             </div>
             <div className="rounded-xl border border-ink-700/70 bg-ink-850/50 p-4">
               <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Stored ingestion</p>
               <p className="mt-2 text-sm font-medium text-slate-200">
-                {formatTimestamp(source?.last_success_at ?? null)}
+                {formatTimestamp(latestLiveSourceSuccess)}
               </p>
               <p className="mt-3 text-xs text-slate-400 leading-relaxed">
                 Source-backed records · Sentinel Atlas does not independently validate source observations.
@@ -245,7 +284,7 @@ export function CommandCentrePage() {
                 {state === 'success'
                   ? 'Stored source records are now visible in the local dashboard layer.'
                   : state === 'empty'
-                    ? 'No stored records are currently available for the active USGS earthquake layer.'
+                    ? 'No stored records are currently available for the active live source layer.'
                     : state === 'unconfigured'
                       ? 'The layer remains non-breaking and read-only while configuration is missing.'
                       : 'The live layer is temporarily unavailable while the stored data request is being retried.'}
@@ -273,7 +312,7 @@ export function CommandCentrePage() {
               </div>
             ))}
             <span className="text-xs text-slate-600">·</span>
-            <span className="text-xs text-slate-600">Mock map · Prototype Fixture</span>
+            <span className="text-xs text-slate-600">Mock map · Live source records + prototype fixtures</span>
           </div>
         </div>
 
@@ -314,7 +353,7 @@ export function CommandCentrePage() {
             </div>
           </div>
           <p className="mt-2 text-[11px] text-slate-600">
-            Illustrative fixture activity — no live feed connected.
+            Illustrative stream entries with live source records shown on the map.
           </p>
         </div>
       </div>
@@ -367,7 +406,33 @@ export function CommandCentrePage() {
       <div className="mt-8">
         <SectionHeader title="Source Health" icon={Server} />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 stagger-children">
-          {mockSources.map((source) => (
+          {sources.map((source) => (
+            <div key={source.id} className="panel panel-hover p-4 transition-all duration-300">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-100">
+                    {source.code === 'eonet' ? 'NASA EONET' : source.code === 'usgs' ? 'USGS Earthquake Catalog' : source.display_name}
+                  </h3>
+                  <p className="mt-0.5 text-xs text-slate-500">Live source-backed records</p>
+                </div>
+                <span className={`h-2.5 w-2.5 rounded-full ${source.ingestion_status === 'operational' ? 'bg-success-500' : source.ingestion_status === 'degraded' ? 'bg-warning-500' : 'bg-slate-500'}`} />
+              </div>
+              <p className="mt-3 text-xs text-slate-400 leading-relaxed">
+                Status is tracked independently for this source. Sentinel Atlas does not independently validate provider observations.
+              </p>
+              <div className="mt-3 border-t border-ink-700/60 pt-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Status</span>
+                  <span className="text-slate-300">{source.ingestion_status ?? 'status unavailable'}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-slate-500">Last success</span>
+                  <span className="font-mono text-cyan-300">{formatTimestamp(source.last_success_at)}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+          {mockSources.filter((source) => !liveSourceCodes.has(source.id)).map((source) => (
             <SourceHealthCard key={source.id} source={source} />
           ))}
         </div>
@@ -387,7 +452,7 @@ export function CommandCentrePage() {
               How this prototype works
             </h3>
             <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-              This interface uses local prototype fixtures. No live public-source data is ingested.
+              This interface combines live source-backed records with local prototype fixtures.
               Learn about integrity labels and simulated source data on the Data Trust page.
             </p>
           </div>

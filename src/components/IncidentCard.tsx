@@ -68,7 +68,7 @@ export function IncidentCard({ incident, compact = false }: IncidentCardProps) {
               {hazardTypeLabels[incident.hazardType]}
             </span>
             <span className={`chip text-[10px] ${incident.dataMode === 'live_source' ? 'border-cyan-500/20 bg-cyan-500/5 text-cyan-300' : 'border-warning-500/20 bg-warning-500/5 text-warning-400'}`}>
-              {incident.dataMode === 'live_source' ? 'LIVE SOURCE · USGS' : 'PROTOTYPE FIXTURE'}
+              {incident.dataMode === 'live_source' ? incident.sourceLabel : 'PROTOTYPE FIXTURE'}
             </span>
           </div>
           <h3 className="mt-1.5 text-sm font-semibold text-slate-100 group-hover:text-cyan-300 transition-colors">

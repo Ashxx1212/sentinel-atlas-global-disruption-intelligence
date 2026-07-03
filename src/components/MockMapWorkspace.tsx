@@ -164,11 +164,11 @@ export function MockMapWorkspace({
                       {hazardTypeLabels[incident.hazardType]} · {incident.location}
                     </p>
                     <p className={`mt-1 text-[10px] ${isLiveSource ? 'text-cyan-300' : 'text-slate-600'}`}>
-                      {isLiveSource ? 'USGS source-backed record' : `Fixture status · ${incident.integrity}`}
+                      {isLiveSource ? incident.sourceLabel : `Fixture status · ${incident.integrity}`}
                     </p>
                     {isLiveSource && incident.sourceName && (
                       <p className="mt-1 text-[10px] text-slate-500">
-                        {incident.sourceName} · {incident.magnitude ? `${incident.magnitude.toFixed(1)} M` : 'Magnitude unavailable'}
+                        {incident.sourceName}{incident.magnitude !== null ? ` · ${incident.magnitude.toFixed(1)} M` : ''}
                       </p>
                     )}
                     {interactive && (

@@ -6,6 +6,7 @@ export interface HybridIncident extends Incident {
   dataMode: HybridIncidentDataMode;
   sourceName: string;
   sourceCode: string;
+  sourceLabel: string;
   sourceRecordUrl: string | null;
   sourceFetchedAt: string | null;
   placeName: string | null;
@@ -39,6 +40,7 @@ export interface HybridIncidentSummary {
   dataMode: HybridIncidentDataMode;
   sourceName: string;
   sourceCode: string;
+  sourceLabel: string;
   sourceRecordUrl: string | null;
   sourceFetchedAt: string | null;
   placeName: string | null;

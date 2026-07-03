@@ -67,7 +67,7 @@ export function GlobalMapPage() {
     <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="Global Map"
-        subtitle="Full-page hazard workspace with severity and hazard-type filtering. Map positions are illustrative in Prototype Mode."
+        subtitle="Full-page hazard workspace with live source records and prototype fixtures, filterable by severity and hazard type."
       >
         <PrototypeNotice />
       </PageHeader>
@@ -209,7 +209,7 @@ export function GlobalMapPage() {
             className="h-[400px] sm:h-[500px] lg:h-[600px]"
           />
           <p className="mt-2 text-xs text-slate-500">
-            USGS positions are plotted from stored source coordinates. Map styling remains illustrative.
+            Live source positions are plotted from stored source coordinates. Map styling remains illustrative.
           </p>
         </div>
 
