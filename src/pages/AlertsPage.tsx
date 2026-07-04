@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Bell, CheckCheck, AlertOctagon, Inbox, CheckCircle2 } from 'lucide-react';
-import { mockAlerts, hazardTypeLabels } from '../data/mockIncidents';
+import { Bell, CheckCheck, AlertOctagon, Inbox, CheckCircle2, RefreshCw } from 'lucide-react';
+import { hazardTypeLabels } from '../data/mockIncidents';
 import type { AlertEntry, Severity } from '../types';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { PageHeader, PrototypeNotice, EmptyState } from '../components/ui';
+import { usePrototypeAlerts } from '../contexts/AlertContext';
 
 type AlertTab = 'all' | 'unread' | 'high-priority';
 
@@ -31,7 +32,7 @@ const severityDot: Record<Severity, string> = {
 };
 
 export function AlertsPage() {
-  const [alerts, setAlerts] = useState<AlertEntry[]>(mockAlerts);
+  const { alerts, markAlertRead, markAllAlertsRead, resetPrototypeAlerts } = usePrototypeAlerts();
   const [activeTab, setActiveTab] = useState<AlertTab>('all');
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -69,24 +70,18 @@ export function AlertsPage() {
 
   const unreadCount = alerts.filter((a) => !a.read).length;
 
-  const markAsRead = (id: string) => {
-    setAlerts((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, read: true } : a))
-    );
-  };
-
   const markAsReadAndToast = (id: string) => {
-    markAsRead(id);
+    markAlertRead(id);
     showToast('Alert marked as read');
   };
 
   const openIncident = (alert: AlertEntry) => {
-    markAsRead(alert.id);
+    markAlertRead(alert.id);
     navigate(`/incidents/${alert.incidentId}`);
   };
 
   const markAllRead = () => {
-    setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
+    markAllAlertsRead();
     showToast('All alerts marked as read');
   };
 
@@ -118,13 +113,24 @@ export function AlertsPage() {
             <span className="font-mono">{alerts.length}</span> total
           </span>
         </div>
-        {unreadCount > 0 && (
+        {unreadCount > 0 ? (
           <button
             onClick={markAllRead}
             className="flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-cyan-300"
           >
             <CheckCheck className="h-3.5 w-3.5" />
             Mark all read
+          </button>
+        ) : (
+          <button
+            onClick={() => {
+              resetPrototypeAlerts();
+              showToast('Demo alerts reset');
+            }}
+            className="flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-cyan-300"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Reset demo alerts
           </button>
         )}
       </div>
