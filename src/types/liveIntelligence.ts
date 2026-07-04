@@ -7,6 +7,7 @@ export interface LiveUsgsSourceStatus {
   source_mode: string | null;
   ingestion_status: string | null;
   last_success_at: string | null;
+  last_error_at: string | null;
 }
 
 export interface LiveUsgsIncidentRecord {

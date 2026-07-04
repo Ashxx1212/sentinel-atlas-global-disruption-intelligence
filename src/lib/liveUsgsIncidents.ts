@@ -36,6 +36,7 @@ function normalizeSourceStatus(row: Record<string, unknown> | null): LiveUsgsSou
     source_mode: typeof row.source_mode === 'string' ? row.source_mode : null,
     ingestion_status: typeof row.ingestion_status === 'string' ? row.ingestion_status : null,
     last_success_at: typeof row.last_success_at === 'string' ? row.last_success_at : null,
+    last_error_at: typeof row.last_error_at === 'string' ? row.last_error_at : null,
   };
 }
 
@@ -109,7 +110,7 @@ async function fetchConfiguredLiveSources(): Promise<LiveUsgsSourceStatus[]> {
 
   const { data, error } = await supabase
     .from('data_sources')
-    .select('id, code, display_name, source_mode, ingestion_status, last_success_at')
+    .select('id, code, display_name, source_mode, ingestion_status, last_success_at, last_error_at')
     .in('code', [...LIVE_SOURCE_CODES]);
 
   if (error) {
@@ -155,7 +156,7 @@ export async function fetchLiveUsgsIncidentDetail(incidentId: string): Promise<L
     const { data: sourceRow, error: sourceError } = primarySourceId
       ? await supabase
         .from('data_sources')
-        .select('id, code, display_name, source_mode, ingestion_status, last_success_at')
+        .select('id, code, display_name, source_mode, ingestion_status, last_success_at, last_error_at')
         .eq('id', primarySourceId)
         .maybeSingle()
       : { data: null, error: null };

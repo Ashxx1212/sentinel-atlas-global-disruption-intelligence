@@ -26,7 +26,7 @@ import type { IntelligenceStreamEntry, PriorityRegion } from '../types';
 import type { HybridIncident } from '../types/hybridIntelligence';
 import { MetricCard } from '../components/MetricCard';
 import { SeverityBadge } from '../components/SeverityBadge';
-import { SourceHealthCard } from '../components/SourceHealthCard';
+import { LiveSourceHealthPanel } from '../components/LiveSourceHealthPanel';
 import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
 import { MockMapWorkspace } from '../components/MockMapWorkspace';
 import { IncidentDrawer } from '../components/IncidentDrawer';
@@ -405,40 +405,12 @@ export function CommandCentrePage() {
 
       {/* Source Health */}
       <div className="mt-8">
-        <SectionHeader title="Source Health" icon={Server} />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 stagger-children">
-          {sources.map((source) => (
-            <div key={source.id} className="panel panel-hover p-4 transition-all duration-300">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    {source.code === 'gdacs' ? 'GDACS' : source.code === 'eonet' ? 'NASA EONET' : source.code === 'usgs' ? 'USGS Earthquake Catalog' : source.display_name}
-                  </h3>
-                  <p className="mt-0.5 text-xs text-slate-500">Live source-backed records</p>
-                </div>
-                <span className={`h-2.5 w-2.5 rounded-full ${source.ingestion_status === 'operational' ? 'bg-success-500' : source.ingestion_status === 'degraded' ? 'bg-warning-500' : 'bg-slate-500'}`} />
-              </div>
-              <p className="mt-3 text-xs text-slate-400 leading-relaxed">
-                {source.code === 'gdacs'
-                  ? 'GDACS awareness and coordination metadata. Not an official emergency warning.'
-                  : 'Status is tracked independently for this source. Sentinel Atlas does not independently validate provider observations.'}
-              </p>
-              <div className="mt-3 border-t border-ink-700/60 pt-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-500">Status</span>
-                  <span className="text-slate-300">{source.ingestion_status ?? 'status unavailable'}</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between">
-                  <span className="text-slate-500">Last success</span>
-                  <span className="font-mono text-cyan-300">{formatTimestamp(source.last_success_at)}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-          {mockSources.filter((source) => !liveSourceCodes.has(source.id)).map((source) => (
-            <SourceHealthCard key={source.id} source={source} />
-          ))}
-        </div>
+        <LiveSourceHealthPanel
+          state={state}
+          sources={sources}
+          records={records}
+          onRefresh={() => { void refresh(true); }}
+        />
       </div>
 
       {/* How this prototype works */}
