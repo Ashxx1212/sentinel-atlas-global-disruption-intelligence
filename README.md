@@ -19,6 +19,21 @@ The platform intentionally distinguishes between:
 - **Prototype fixtures** used for demonstration workflows such as alerts, briefings, and scenario context
 
 This avoids presenting local prototype data as verified live intelligence.
+## Product Preview
+
+<p align="center">
+  <img src="docs/screenshots/01-landing-page.jpg" alt="Sentinel Atlas landing page" width="100%" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/02-incident-rooms.jpg" alt="Incident Rooms with hazard filters and incident records" width="49%" />
+  <img src="docs/screenshots/03-global-hazard-map.jpg" alt="Global hazard map and intelligence stream" width="49%" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/04-notification-centre.jpg" alt="Notification Centre with alert rules and incident links" width="49%" />
+  <img src="docs/screenshots/05-data-trust.jpg" alt="Data Trust page with integrity labels" width="49%" />
+</p>
 
 ---
 
