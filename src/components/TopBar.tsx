@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Search,
   Bell,
@@ -41,6 +41,7 @@ function liveSourceLabel(code: string, fallbackName: string): string {
 
 export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [profileOpen, setProfileOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -482,6 +483,21 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
                   <p className="text-xs text-slate-500">{isAuthenticated ? user?.email ?? 'Signed in' : 'Local prototype session'}</p>
                 </div>
                 <div className="mt-1 space-y-0.5">
+                  {!isAuthenticated && (
+                    <>
+                      <button
+                        onClick={() => {
+                          navigate(`/auth?next=${encodeURIComponent(location.pathname)}`);
+                          setProfileOpen(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-md bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-300 transition-colors hover:bg-cyan-500/15"
+                      >
+                        <ArrowRight className="h-3.5 w-3.5" />
+                        Sign in to your workspace
+                      </button>
+                      <div className="my-1 border-t border-ink-700/60" />
+                    </>
+                  )}
                   <button
                     onClick={() => {
                       navigate('/settings');

@@ -21,7 +21,7 @@ interface AuthContextValue {
   authError: string | null;
   authMessage: string | null;
   pendingEmailConfirmation: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string) => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -183,7 +183,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (email: string, password: string) => {
     if (!supabase || !isSupabaseConfigured) {
       setAuthError('Supabase is not configured in this browser build.');
-      return;
+      return false;
     }
 
     setLoading(true);
@@ -191,17 +191,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthMessage(null);
     setPendingEmailConfirmation(false);
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setAuthError(error.message || 'Unable to sign in.');
-      setLoading(false);
-      return;
-    }
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error || !data.session || !data.user) {
+        setAuthError(error?.message || 'Unable to sign in.');
+        setLoading(false);
+        return false;
+      }
 
-    setSession(data.session);
-    setUser(data.user);
-    await applyProfileForUser(data.user);
-    setLoading(false);
+      setSession(data.session);
+      setUser(data.user);
+      await applyProfileForUser(data.user);
+      setLoading(false);
+      return true;
+    } catch {
+      setAuthError('Unable to sign in. Please check your connection and try again.');
+      setLoading(false);
+      return false;
+    }
   }, [applyProfileForUser]);
 
   const signUp = useCallback(async (email: string, password: string) => {

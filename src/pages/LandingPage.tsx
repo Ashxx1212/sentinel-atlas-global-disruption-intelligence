@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import {
   ArrowRight,
   Globe2,
@@ -20,7 +21,10 @@ const trustSources = [
 ];
 
 export function LandingPage() {
+  const { isAuthenticated } = useAuth();
   const mapIncidents = mockIncidents.map(buildHybridIncidentFromFixture);
+  const workspaceRoute = isAuthenticated ? '/command-centre' : '/auth?next=/command-centre';
+  const workspaceLabel = isAuthenticated ? 'Open workspace' : 'Sign in';
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-ink-950">
@@ -55,10 +59,10 @@ export function LandingPage() {
           </div>
         </div>
         <Link
-          to="/command-centre"
+          to={workspaceRoute}
           className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-ink-600 px-4 py-2 text-sm font-medium text-slate-300 transition-all hover:border-cyan-500/40 hover:text-cyan-300"
         >
-          Sign in
+          {workspaceLabel}
           <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </header>

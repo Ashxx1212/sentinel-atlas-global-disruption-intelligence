@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, Mail, ShieldCheck, Sparkles } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { ArrowRight, CheckCircle2, Loader2, Mail, ShieldCheck, Sparkles } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 const timezoneOptions = [
@@ -31,10 +31,32 @@ export function AuthPage() {
   const [timezone, setTimezone] = useState(getDefaultTimezone);
   const [watchlistIntent, setWatchlistIntent] = useState('critical-hazards');
   const [formError, setFormError] = useState<string | null>(null);
+  const [signInComplete, setSignInComplete] = useState(false);
+  const [signInSubmitting, setSignInSubmitting] = useState(false);
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const nextPath = useMemo(() => {
+    const candidate = searchParams.get('next');
+    return candidate && candidate.startsWith('/') && !candidate.startsWith('//')
+      ? candidate
+      : '/command-centre';
+  }, [searchParams]);
 
   useEffect(() => {
     setFormError(authError);
   }, [authError]);
+
+  useEffect(() => {
+    if (!signInComplete || !isAuthenticated || needsOnboarding || loading) {
+      return;
+    }
+
+    const redirectTimer = window.setTimeout(() => {
+      navigate(nextPath, { replace: true });
+    }, 900);
+
+    return () => window.clearTimeout(redirectTimer);
+  }, [isAuthenticated, loading, navigate, needsOnboarding, nextPath, signInComplete]);
 
   const submitLabel = useMemo(() => {
     if (mode === 'signup') return 'Create account';
@@ -73,7 +95,17 @@ export function AuthPage() {
       return;
     }
 
-    await signIn(email.trim(), password);
+    setSignInComplete(false);
+    setSignInSubmitting(true);
+
+    try {
+      const didSignIn = await signIn(email.trim(), password);
+      if (didSignIn) {
+        setSignInComplete(true);
+      }
+    } finally {
+      setSignInSubmitting(false);
+    }
   };
 
   const handleOnboardingSubmit = async (event: React.FormEvent) => {
@@ -190,9 +222,9 @@ export function AuthPage() {
 
         <div className="rounded-2xl border border-ink-700/60 bg-ink-900/90 p-8 shadow-panel">
           <div className="flex items-center gap-2 text-sm text-slate-500">
-            <button type="button" onClick={() => { setMode('signin'); setFormError(null); }} className={`rounded-full px-3 py-1.5 ${mode === 'signin' ? 'bg-cyan-500/10 text-cyan-300' : 'bg-ink-800/70 text-slate-400'}`}>Sign in</button>
-            <button type="button" onClick={() => { setMode('signup'); setFormError(null); }} className={`rounded-full px-3 py-1.5 ${mode === 'signup' ? 'bg-cyan-500/10 text-cyan-300' : 'bg-ink-800/70 text-slate-400'}`}>Create account</button>
-            <button type="button" onClick={() => { setMode('forgot'); setFormError(null); }} className={`rounded-full px-3 py-1.5 ${mode === 'forgot' ? 'bg-cyan-500/10 text-cyan-300' : 'bg-ink-800/70 text-slate-400'}`}>Forgot password</button>
+            <button type="button" onClick={() => { setMode('signin'); setFormError(null); setSignInComplete(false); }} className={`rounded-full px-3 py-1.5 ${mode === 'signin' ? 'bg-cyan-500/10 text-cyan-300' : 'bg-ink-800/70 text-slate-400'}`}>Sign in</button>
+            <button type="button" onClick={() => { setMode('signup'); setFormError(null); setSignInComplete(false); }} className={`rounded-full px-3 py-1.5 ${mode === 'signup' ? 'bg-cyan-500/10 text-cyan-300' : 'bg-ink-800/70 text-slate-400'}`}>Create account</button>
+            <button type="button" onClick={() => { setMode('forgot'); setFormError(null); setSignInComplete(false); }} className={`rounded-full px-3 py-1.5 ${mode === 'forgot' ? 'bg-cyan-500/10 text-cyan-300' : 'bg-ink-800/70 text-slate-400'}`}>Forgot password</button>
           </div>
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
@@ -214,9 +246,33 @@ export function AuthPage() {
             )}
             {(formError || authError) && <p className="text-sm text-error-400">{formError || authError}</p>}
             {authMessage && <p className="text-sm text-cyan-300">{authMessage}</p>}
-            <button type="submit" className="btn-primary inline-flex w-full items-center justify-center gap-2" disabled={loading}>
-              {submitLabel}
-              <ArrowRight className="h-4 w-4" />
+            {signInComplete && mode === 'signin' && !needsOnboarding && (
+              <p className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                Signed in successfully. Opening your Command Centre…
+              </p>
+            )}
+            <button
+              type="submit"
+              className="btn-primary inline-flex w-full items-center justify-center gap-2"
+              disabled={loading || signInSubmitting || signInComplete}
+            >
+              {mode === 'signin' && signInComplete ? (
+                <>
+                  <CheckCircle2 className="h-4 w-4" />
+                  Signed in
+                </>
+              ) : loading || signInSubmitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {mode === 'signin' ? 'Signing in…' : submitLabel}
+                </>
+              ) : (
+                <>
+                  {submitLabel}
+                  <ArrowRight className="h-4 w-4" />
+                </>
+              )}
             </button>
           </form>
 
