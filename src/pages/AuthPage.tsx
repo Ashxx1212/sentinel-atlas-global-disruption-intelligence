@@ -211,7 +211,7 @@ export function AuthPage() {
             <ShieldCheck className="h-5 w-5" />
             <span className="text-xs font-semibold uppercase tracking-[0.28em]">Sentinel Atlas auth</span>
           </div>
-          <h1 className="mt-4 text-3xl font-semibold text-slate-100">Premium access to your personal intelligence workspace.</h1>
+          <h1 className="mt-4 text-3xl font-semibold text-slate-100">Secure access to your personal intelligence workspace.</h1>
           <p className="mt-3 text-sm leading-relaxed text-slate-400">Sign in with your email and password to keep your workspace sync, onboarding state, and personalisation profile intact. Public pages such as the map, incident rooms, and data trust stay available to everyone.</p>
           <div className="mt-6 space-y-3 rounded-xl border border-ink-700/60 bg-ink-950/60 p-4 text-sm text-slate-400">
             <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-cyan-300" /> Read-only access to public intelligence views</div>

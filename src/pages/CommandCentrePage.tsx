@@ -105,15 +105,7 @@ export function CommandCentrePage() {
 
     return timestamps[0] ?? null;
   }, [sources]);
-  const sourceSummary = useMemo(() => {
-    if (sources.length === 0) {
-      return 'LIVE SOURCE RECORDS';
-    }
-
-    return sources
-      .map((source) => source.code === 'gdacs' ? 'GDACS' : source.code === 'eonet' ? 'NASA EONET' : source.code === 'usgs' ? 'USGS Earthquake Catalog' : source.display_name)
-      .join(' + ');
-  }, [sources]);
+  
   const liveSourceCodes = useMemo(() => new Set(sources.map((source) => source.code)), [sources]);
   const prototypeSourceCount = useMemo(
     () => mockSources.filter((source) => !liveSourceCodes.has(source.id)).length,
@@ -126,6 +118,28 @@ export function CommandCentrePage() {
       ).length,
     [sources],
   );
+  const degradedLiveSourceCount = useMemo(
+  () =>
+    sources.filter(
+      (source) => source.source_mode === 'live_source' && source.ingestion_status === 'degraded',
+    ).length,
+  [sources],
+);
+
+const sourceHealthSublabel = useMemo(() => {
+  const degradedLabel =
+    degradedLiveSourceCount > 0
+      ? `${degradedLiveSourceCount} degraded source${
+          degradedLiveSourceCount === 1 ? '' : 's'
+        }`
+      : 'all live sources healthy';
+
+  const fixtureLabel = `${prototypeSourceCount} prototype fixture${
+    prototypeSourceCount === 1 ? '' : 's'
+  }`;
+
+  return `${degradedLabel} · ${fixtureLabel}`;
+}, [degradedLiveSourceCount, prototypeSourceCount]);
 
   const activeCount = useMemo(() => commandMapIncidents.filter((i) => i.status === 'active').length, [commandMapIncidents]);
   const criticalCount = useMemo(() => commandMapIncidents.filter((i) => i.severity === 'critical').length, [commandMapIncidents]);
@@ -190,14 +204,12 @@ export function CommandCentrePage() {
           aria-label="View source health"
         >
               <MetricCard
-                label="Source Health"
-                value={`${operationalLiveSourceCount} live sources`}
-                icon={Server}
-                accent="high"
-                sublabel={`operational · ${prototypeSourceCount} prototype fixture${
-                  prototypeSourceCount === 1 ? '' : 's'
-                }`}
-              />
+             label="Source Health"
+             value={`${operationalLiveSourceCount} operational`}
+             icon={Server}
+             accent="high"
+             sublabel={sourceHealthSublabel}
+           />
         </button>
       </div>
 
@@ -217,7 +229,7 @@ export function CommandCentrePage() {
               disabled={state === 'loading'}
             >
               <RefreshCw className={`h-4 w-4 ${state === 'loading' ? 'animate-spin' : ''}`} />
-              {state === 'loading' ? 'Refreshing live source records...' : 'Refresh live source records'}
+              {state === 'loading' ? 'Refreshing database data...' : 'Refresh database data'}
             </button>
             <Link to="/global-map" className="btn-primary">
               <MapPin className="h-4 w-4" />
@@ -249,20 +261,28 @@ export function CommandCentrePage() {
             <div className="rounded-xl border border-ink-700/70 bg-ink-850/50 p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
                 {state === 'success' ? <CheckCircle2 className="h-4 w-4 text-success-400" /> : state === 'error' ? <AlertTriangle className="h-4 w-4 text-error-400" /> : state === 'empty' ? <DatabaseZap className="h-4 w-4 text-slate-400" /> : <AlertTriangle className="h-4 w-4 text-warning-400" />}
-                <span>{state === 'success' ? `${sourceSummary} connected` : state === 'unconfigured' ? 'Source connection unavailable' : state === 'empty' ? 'No active stored records currently available' : state === 'error' ? 'Stored layer unavailable' : 'Retrieving stored live source records'}</span>
+                <span>
+  {state === 'success'
+    ? 'Live source registry available'
+    : state === 'unconfigured'
+      ? 'Source connection unavailable'
+      : state === 'empty'
+        ? 'No active stored records currently available'
+        : state === 'error'
+          ? 'Stored layer unavailable'
+          : 'Retrieving stored live source records'}
+</span>
               </div>
               <p className={`mt-3 text-sm ${statusTone(state)}`}>
-                {state === 'success' && sources.some((source) => source.source_mode === 'live_source' && source.ingestion_status === 'operational')
-                  ? 'Stored source records are available from the latest connected ingestion snapshot.'
-                  : state === 'success'
-                    ? 'Stored source records are available, but the current source status is not marked operational.'
-                    : state === 'empty'
-                      ? 'No active stored live source records are currently available in Sentinel Atlas.'
-                      : state === 'unconfigured'
-                        ? 'Supabase is not configured in this browser session, so the layer remains gracefully unavailable.'
-                        : state === 'error'
-                          ? errorMessage ?? 'The stored layer could not be loaded.'
-                          : 'Retrieving the latest stored live source records for this view.'}
+                {state === 'success'
+                 ? 'Stored source records are available from the most recent successful ingestion snapshot.'
+                 : state === 'empty'
+               ? 'No active stored live source records are currently available in Sentinel Atlas.'
+               : state === 'unconfigured'
+              ? 'Supabase is not configured in this browser session, so the layer remains gracefully unavailable.'
+              : state === 'error'
+            ? errorMessage ?? 'The stored layer could not be loaded.'
+            : 'Retrieving the latest stored live source records for this view.'}
               </p>
               <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-400">
                 <span className="chip border-cyan-500/20 bg-cyan-500/10 text-cyan-300">{recordCount} active stored record{recordCount === 1 ? '' : 's'}</span>
