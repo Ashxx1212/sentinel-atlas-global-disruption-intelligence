@@ -29,18 +29,22 @@ export function PageHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-col gap-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+    <div className="page-header-container mb-6">
+      <div className="page-header-content">
         <div className="min-w-0 max-w-2xl">
           <h1 className="text-2xl font-bold tracking-tight text-slate-100 sm:text-3xl">
             {title}
           </h1>
+
           {subtitle && (
-            <p className="mt-1.5 text-sm text-slate-400 leading-relaxed">{subtitle}</p>
+            <p className="mt-1.5 text-sm leading-relaxed text-slate-400">
+              {subtitle}
+            </p>
           )}
         </div>
+
         {children && (
-          <div className="flex-shrink-0 w-full lg:w-auto">
+          <div className="page-header-actions">
             {children}
           </div>
         )}

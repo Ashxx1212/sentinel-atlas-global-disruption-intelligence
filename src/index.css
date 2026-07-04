@@ -70,6 +70,38 @@
 
 @layer components {
   .panel {
+      /*
+   * Keep headers stacked inside narrower page columns.
+   * Switch title + notice side-by-side only when the actual header
+   * container is wide enough, rather than based on viewport width alone.
+   */
+  .page-header-container {
+    container-type: inline-size;
+  }
+
+  .page-header-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .page-header-actions {
+    min-width: 0;
+    width: 100%;
+  }
+
+  @container (min-width: 72rem) {
+    .page-header-content {
+      flex-direction: row;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+
+    .page-header-actions {
+      width: auto;
+      flex-shrink: 0;
+    }
+  }
     @apply bg-ink-850/80 border border-ink-700/60 rounded-xl backdrop-blur-sm;
   }
 
