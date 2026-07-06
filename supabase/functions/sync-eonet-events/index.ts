@@ -457,8 +457,7 @@ const changeFingerprint = JSON.stringify({
         record_state: recordState,
         severity_fallback: "advisory",
         source_record_url: sourceRecordUrl,
-      },
-       },
+     },
   }),
 };
 
