@@ -50,7 +50,7 @@ export function classifyNetworkFailure(kind: "network" | "timeout"): ProviderFai
 
 export function canStartProviderAttempt(
   providerAttemptCount: number,
-  maxProviderAttempts = EONET_RESILIENCE_LIMITS.maxProviderAttempts,
+  maxProviderAttempts: number = EONET_RESILIENCE_LIMITS.maxProviderAttempts,
 ): boolean {
   return providerAttemptCount < maxProviderAttempts;
 }
