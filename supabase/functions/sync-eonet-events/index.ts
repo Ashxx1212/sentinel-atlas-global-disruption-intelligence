@@ -1,4 +1,5 @@
 import { withSupabase } from "npm:@supabase/server@^1";
+import type { Database } from "./database.types.ts";
 import {
   canStartProviderAttempt,
   classifyHttpStatus,
@@ -1103,7 +1104,7 @@ async function fetchEonetSourceRecords(referenceIso: string): Promise<{
 }
 
 export default {
-  fetch: withSupabase({ auth: "none" }, async (request, context) => {
+  fetch: withSupabase<Database>({ auth: "none" }, async (request, context) => {
     if (request.method !== "POST") {
       return Response.json(
         {
