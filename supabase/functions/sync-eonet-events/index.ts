@@ -1,4 +1,15 @@
 import { withSupabase } from "npm:@supabase/server@^1";
+import {
+  canStartProviderAttempt,
+  classifyHttpStatus,
+  classifyNetworkFailure,
+  createProviderFailureSummary,
+  EONET_RESILIENCE_LIMITS,
+  finalProviderOutcome,
+  ProviderFailureSummary,
+  retryDelayForFailure,
+  shouldRetryProviderFailure,
+} from "./eonetResilience.ts";
 
 type EonetCategoryId = "wildfires" | "volcanoes" | "floods" | "severeStorms";
 type SentinelHazardType = "wildfire" | "volcano" | "flood" | "severe-weather";
@@ -93,6 +104,7 @@ type ClosedPartitionOutcome =
   | "accepted"
   | "split"
   | "minimum_window_saturated"
+  | "provider_failure"
   | "request_cap_reached"
   | "time_budget_reached";
 
@@ -109,6 +121,11 @@ type EonetFetchState = {
   endpoints: string[];
   providerWarnings: string[];
   providerRequestCount: number;
+  successfulProviderResponseCount: number;
+  retryCount: number;
+  retryableFailureCount: number;
+  providerStatus: Record<string, number>;
+  providerFailureSummaries: ProviderFailureSummary[];
   fetchStartedAt: number;
   closedPartitions: ClosedPartitionMetadata[];
   saturatedOpenCategories: EonetCategoryId[];
@@ -130,9 +147,10 @@ const EONET_CATEGORY_PRIORITY: readonly EonetCategoryId[] = [
 const INCLUDED_CATEGORIES = EONET_CATEGORY_PRIORITY;
 const CLOSED_LOOKBACK_DAYS = 45;
 const RESULT_LIMIT = 100;
-const MAX_EONET_PROVIDER_REQUESTS = 20;
+const MAX_EONET_PROVIDER_REQUESTS = EONET_RESILIENCE_LIMITS.maxProviderAttempts;
 const FETCH_BUDGET_MS = 95_000;
-const REQUEST_TIMEOUT_MS = 15_000;
+const REQUEST_TIMEOUT_MS = EONET_RESILIENCE_LIMITS.requestTimeoutMs;
+const RETRY_BUDGET_GUARD_MS = EONET_RESILIENCE_LIMITS.retryBudgetGuardMs;
 const SOURCE_CODE = "eonet";
 const CLOSED_PARTITION_STRATEGY = "category-first-event-date-bisection";
 
@@ -438,9 +456,57 @@ function normalizeEvents(events: EonetEvent[]): {
   };
 }
 
+class EonetHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterHeader: string | null,
+  ) {
+    super(`NASA EONET returned HTTP ${status}.`);
+  }
+}
+
+class EonetDataError extends Error {
+  constructor(readonly safeStatus: string, message: string) {
+    super(message);
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function providerFailureFromError(error: unknown): {
+  status: string;
+  retryable: boolean;
+  retryAfterHeader: string | null;
+} {
+  if (error instanceof EonetHttpError) {
+    return {
+      ...classifyHttpStatus(error.status),
+      retryAfterHeader: error.retryAfterHeader,
+    };
+  }
+
+  if (error instanceof EonetDataError) {
+    return {
+      status: error.safeStatus,
+      retryable: false,
+      retryAfterHeader: null,
+    };
+  }
+
+  const classification = classifyNetworkFailure(isAbortError(error) ? "timeout" : "network");
+
+  return {
+    ...classification,
+    retryAfterHeader: null,
+  };
+}
+
 async function fetchEonetEvents(params: Record<string, string>): Promise<{
   endpoint: string;
   events: EonetEvent[];
+  status: number;
 }> {
   const url = new URL(EONET_EVENTS_URL);
   for (const [key, value] of Object.entries(params)) {
@@ -459,17 +525,27 @@ async function fetchEonetEvents(params: Record<string, string>): Promise<{
     });
 
     if (!response.ok) {
-      throw new Error(`NASA EONET returned HTTP ${response.status}.`);
+      throw new EonetHttpError(response.status, response.headers.get("Retry-After"));
     }
 
-    const payload = (await response.json()) as EonetEventsResponse;
+    let payload: EonetEventsResponse;
+    try {
+      payload = (await response.json()) as EonetEventsResponse;
+    } catch {
+      throw new EonetDataError("invalid_json", "NASA EONET response was not valid JSON.");
+    }
+
     if (!Array.isArray(payload.events)) {
-      throw new Error("NASA EONET response did not contain an events array.");
+      throw new EonetDataError(
+        "invalid_events_array",
+        "NASA EONET response did not contain an events array.",
+      );
     }
 
     return {
       endpoint: url.toString(),
       events: payload.events,
+      status: response.status,
     };
   } finally {
     clearTimeout(timeout);
@@ -562,10 +638,73 @@ function addProviderWarning(state: EonetFetchState, warning: string): void {
   }
 }
 
+function addProviderStatus(state: EonetFetchState, status: string): void {
+  state.providerStatus[status] = (state.providerStatus[status] ?? 0) + 1;
+}
+
 function addUniqueCategory(categories: EonetCategoryId[], category: EonetCategoryId): void {
   if (!categories.includes(category)) {
     categories.push(category);
   }
+}
+
+function remainingFetchBudgetMs(state: EonetFetchState): number {
+  return Math.max(0, FETCH_BUDGET_MS - (Date.now() - state.fetchStartedAt));
+}
+
+function providerFailureOutcome(
+  state: EonetFetchState,
+  partitionRetryCount: number,
+  retryDelayMs: number | null,
+): string {
+  if (partitionRetryCount >= EONET_RESILIENCE_LIMITS.maxRetriesPerPartition) {
+    return "partition_retry_limit_reached";
+  }
+
+  if (state.retryCount >= EONET_RESILIENCE_LIMITS.maxRetriesPerRun) {
+    return "run_retry_limit_reached";
+  }
+
+  if (!canStartProviderAttempt(state.providerRequestCount, MAX_EONET_PROVIDER_REQUESTS)) {
+    return "request_cap_reached";
+  }
+
+  if (
+    retryDelayMs !== null &&
+    remainingFetchBudgetMs(state) <
+      retryDelayMs + REQUEST_TIMEOUT_MS + RETRY_BUDGET_GUARD_MS
+  ) {
+    return "time_budget_reached";
+  }
+
+  return "retry_exhausted";
+}
+
+function addProviderFailureSummary(
+  state: EonetFetchState,
+  category: EonetCategoryId,
+  partition: string,
+  status: string,
+  attempts: number,
+  outcome: string,
+): void {
+  const summary = createProviderFailureSummary({
+    category,
+    partition,
+    status,
+    attempts,
+    outcome,
+  });
+
+  state.providerFailureSummaries.push(summary);
+  addProviderWarning(
+    state,
+    `EONET provider partition failed: category=${summary.category}, partition=${summary.partition}, status=${summary.status}, outcome=${summary.outcome}; preserved records fetched so far.`,
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function stopProviderFetches(
@@ -595,6 +734,8 @@ function stopProviderFetches(
 
 function canStartProviderRequest(
   state: EonetFetchState,
+  category: EonetCategoryId,
+  partition: string,
   description: string,
   skippedPartition?: { category: EonetCategoryId; start: string; end: string },
 ): boolean {
@@ -602,8 +743,16 @@ function canStartProviderRequest(
     return false;
   }
 
-  if (state.providerRequestCount >= MAX_EONET_PROVIDER_REQUESTS) {
+  if (!canStartProviderAttempt(state.providerRequestCount, MAX_EONET_PROVIDER_REQUESTS)) {
     stopProviderFetches(state, "request_cap_reached", description);
+    addProviderFailureSummary(
+      state,
+      category,
+      partition,
+      "request_cap_reached",
+      0,
+      "skipped_request_cap",
+    );
     if (skippedPartition) {
       state.closedPartitions.push({
         ...skippedPartition,
@@ -617,6 +766,14 @@ function canStartProviderRequest(
   const elapsedMs = Date.now() - state.fetchStartedAt;
   if (elapsedMs + REQUEST_TIMEOUT_MS > FETCH_BUDGET_MS) {
     stopProviderFetches(state, "time_budget_reached", description);
+    addProviderFailureSummary(
+      state,
+      category,
+      partition,
+      "time_budget_reached",
+      0,
+      "skipped_time_budget",
+    );
     if (skippedPartition) {
       state.closedPartitions.push({
         ...skippedPartition,
@@ -633,18 +790,91 @@ function canStartProviderRequest(
 async function fetchTrackedEonetEvents(
   state: EonetFetchState,
   params: Record<string, string>,
-  description: string,
-  skippedPartition?: { category: EonetCategoryId; start: string; end: string },
+  scope: {
+    category: EonetCategoryId;
+    partition: string;
+    description: string;
+    skippedPartition?: { category: EonetCategoryId; start: string; end: string };
+  },
 ): Promise<{ endpoint: string; events: EonetEvent[] } | null> {
-  if (!canStartProviderRequest(state, description, skippedPartition)) {
-    return null;
+  let attempts = 0;
+  let partitionRetryCount = 0;
+
+  while (true) {
+    if (
+      !canStartProviderRequest(
+        state,
+        scope.category,
+        scope.partition,
+        scope.description,
+        scope.skippedPartition,
+      )
+    ) {
+      return null;
+    }
+
+    state.providerRequestCount += 1;
+    attempts += 1;
+
+    try {
+      const result = await fetchEonetEvents(params);
+      state.successfulProviderResponseCount += 1;
+      addProviderStatus(state, `http_${result.status}`);
+      state.endpoints.push(result.endpoint);
+
+      return result;
+    } catch (error) {
+      const failure = providerFailureFromError(error);
+      const retryDelayMs = retryDelayForFailure(failure, failure.retryAfterHeader);
+      addProviderStatus(state, failure.status);
+
+      if (failure.retryable) {
+        state.retryableFailureCount += 1;
+      }
+
+      if (
+        retryDelayMs !== null &&
+        shouldRetryProviderFailure({
+          partitionRetryCount,
+          runRetryCount: state.retryCount,
+          providerAttemptCount: state.providerRequestCount,
+          remainingBudgetMs: remainingFetchBudgetMs(state),
+          retryDelayMs,
+          maxProviderAttempts: MAX_EONET_PROVIDER_REQUESTS,
+          requestTimeoutMs: REQUEST_TIMEOUT_MS,
+          retryBudgetGuardMs: RETRY_BUDGET_GUARD_MS,
+        })
+      ) {
+        state.retryCount += 1;
+        partitionRetryCount += 1;
+        await sleep(retryDelayMs);
+        continue;
+      }
+
+      const outcome = failure.retryable
+        ? providerFailureOutcome(state, partitionRetryCount, retryDelayMs)
+        : "non_retryable";
+
+      addProviderFailureSummary(
+        state,
+        scope.category,
+        scope.partition,
+        failure.status,
+        attempts,
+        outcome,
+      );
+
+      if (scope.skippedPartition) {
+        state.closedPartitions.push({
+          ...scope.skippedPartition,
+          records_returned: 0,
+          outcome: "provider_failure",
+        });
+      }
+
+      return null;
+    }
   }
-
-  const result = await fetchEonetEvents(params);
-  state.providerRequestCount += 1;
-  state.endpoints.push(result.endpoint);
-
-  return result;
 }
 
 async function fetchClosedEventDatePartition(
@@ -662,8 +892,12 @@ async function fetchClosedEventDatePartition(
       end,
       limit: String(RESULT_LIMIT),
     },
-    `closed EONET event-date partition for ${category} (${start}..${end})`,
-    { category, start, end },
+    {
+      category,
+      partition: "closed_partition",
+      description: `closed EONET event-date partition for ${category} (${start}..${end})`,
+      skippedPartition: { category, start, end },
+    },
   );
 
   if (!result) {
@@ -723,6 +957,11 @@ async function fetchEonetSourceRecords(referenceIso: string): Promise<{
   endpoints: string[];
   providerWarnings: string[];
   providerRequestCount: number;
+  successfulProviderResponseCount: number;
+  retryCount: number;
+  retryableFailureCount: number;
+  providerStatus: Record<string, number>;
+  providerFailureSummaries: ProviderFailureSummary[];
   closedRangeStart: string;
   closedRangeEnd: string;
   saturatedOpenCategories: EonetCategoryId[];
@@ -736,6 +975,11 @@ async function fetchEonetSourceRecords(referenceIso: string): Promise<{
     endpoints: [],
     providerWarnings: [],
     providerRequestCount: 0,
+    successfulProviderResponseCount: 0,
+    retryCount: 0,
+    retryableFailureCount: 0,
+    providerStatus: {},
+    providerFailureSummaries: [],
     fetchStartedAt: Date.now(),
     closedPartitions: [],
     saturatedOpenCategories: [],
@@ -754,11 +998,18 @@ async function fetchEonetSourceRecords(referenceIso: string): Promise<{
         status: "open",
         limit: String(RESULT_LIMIT),
       },
-      `open EONET category ${category}`,
+      {
+        category,
+        partition: "open",
+        description: `open EONET category ${category}`,
+      },
     );
 
     if (!openResult) {
-      break;
+      if (state.providerFetchStopped) {
+        break;
+      }
+      continue;
     }
 
     state.allEvents.push(...openResult.events);
@@ -784,11 +1035,18 @@ async function fetchEonetSourceRecords(referenceIso: string): Promise<{
         days: String(CLOSED_LOOKBACK_DAYS),
         limit: String(RESULT_LIMIT),
       },
-      `closed EONET days query for ${category}`,
+      {
+        category,
+        partition: "closed_days",
+        description: `closed EONET days query for ${category}`,
+      },
     );
 
     if (!closedResult) {
-      break;
+      if (state.providerFetchStopped) {
+        break;
+      }
+      continue;
     }
 
     state.allEvents.push(...closedResult.events);
@@ -821,6 +1079,11 @@ async function fetchEonetSourceRecords(referenceIso: string): Promise<{
     endpoints: state.endpoints,
     providerWarnings: state.providerWarnings,
     providerRequestCount: state.providerRequestCount,
+    successfulProviderResponseCount: state.successfulProviderResponseCount,
+    retryCount: state.retryCount,
+    retryableFailureCount: state.retryableFailureCount,
+    providerStatus: state.providerStatus,
+    providerFailureSummaries: state.providerFailureSummaries,
     closedRangeStart: state.closedRangeStart,
     closedRangeEnd: state.closedRangeEnd,
     saturatedOpenCategories: state.saturatedOpenCategories,
@@ -903,9 +1166,13 @@ export default {
 
       const {
         allEvents,
-        endpoints,
         providerWarnings,
         providerRequestCount,
+        successfulProviderResponseCount,
+        retryCount,
+        retryableFailureCount,
+        providerStatus,
+        providerFailureSummaries,
         closedRangeStart,
         closedRangeEnd,
         saturatedOpenCategories,
@@ -915,6 +1182,87 @@ export default {
       } = await fetchEonetSourceRecords(fetchedAt);
       const dedupedEvents = dedupeByEventId(allEvents);
       const { normalizedEvents, skippedInvalidCount, skippedNoPointCount } = normalizeEvents(dedupedEvents);
+      const providerOutcome = finalProviderOutcome({
+        successfulProviderResponseCount,
+        providerFailureSummaryCount: providerFailureSummaries.length,
+        providerWarningCount: providerWarnings.length,
+      });
+      const providerMetadata = {
+        source: SOURCE_CODE,
+        categories: INCLUDED_CATEGORIES,
+        closed_lookback_days: CLOSED_LOOKBACK_DAYS,
+        result_limit: RESULT_LIMIT,
+        deduplicated_records: dedupedEvents.length,
+        normalized_records: normalizedEvents.length,
+        provider_warnings: providerWarnings,
+        skipped_invalid_records: skippedInvalidCount,
+        skipped_no_point_records: skippedNoPointCount,
+        provider_request_count: providerRequestCount,
+        max_provider_requests: MAX_EONET_PROVIDER_REQUESTS,
+        fetch_budget_ms: FETCH_BUDGET_MS,
+        closed_partition_strategy: CLOSED_PARTITION_STRATEGY,
+        closed_range_start: closedRangeStart,
+        closed_range_end: closedRangeEnd,
+        saturated_open_categories: saturatedOpenCategories,
+        closed_categories_requiring_partitions: closedCategoriesRequiringPartitions,
+        saturated_closed_categories: saturatedClosedCategories,
+        closed_partitions: closedPartitions,
+        retry_count: retryCount,
+        retryable_failure_count: retryableFailureCount,
+        provider_status: providerStatus,
+        final_provider_outcome: providerOutcome,
+        retained_stored_records: providerOutcome !== "succeeded",
+        provider_failure_summaries: providerFailureSummaries,
+      };
+
+      if (providerOutcome === "failed") {
+        const safeFailureMessage =
+          "NASA EONET provider fetch failed. Existing stored records were retained.";
+
+        const { error: sourceStatusError } = await db
+          .from("data_sources")
+          .update({
+            ingestion_status: "degraded",
+            last_error_at: fetchedAt,
+            last_error_message: safeFailureMessage,
+          })
+          .eq("id", sourceId);
+
+        if (sourceStatusError) {
+          throw new Error("Unable to update the EONET source degraded state.");
+        }
+
+        const { error: completeRunError } = await db
+          .from("ingestion_runs")
+          .update({
+            status: "failed",
+            completed_at: new Date().toISOString(),
+            records_received: allEvents.length,
+            records_created: 0,
+            records_updated: 0,
+            error_message: safeFailureMessage,
+            metadata: providerMetadata,
+          })
+          .eq("id", ingestionRunId);
+
+        if (completeRunError) {
+          throw new Error("Unable to complete the failed EONET ingestion audit record.");
+        }
+
+        return Response.json(
+          {
+            success: false,
+            source: SOURCE_CODE,
+            run_status: "failed",
+            error: safeFailureMessage,
+          },
+          {
+            status: 500,
+            headers: jsonHeaders,
+          },
+        );
+      }
+
       const canonicalKeys = normalizedEvents.map((event) => event.canonicalKey);
       const sourceEventIds = normalizedEvents.map((event) => event.sourceEventId);
 
@@ -1117,21 +1465,31 @@ const resolvedClosedCount = changedEvents.filter(
 ).length;
 
 const incidentUpdateCount = changedEvents.length;
-      const runStatus = providerWarnings.length > 0 ? "partial" : "succeeded";
-
-      const { error: sourceStatusError } = await db
-        .from("data_sources")
-        .update({
+      const runStatus = providerOutcome;
+      const sourceStatusUpdate = runStatus === "succeeded"
+        ? {
           source_mode: "live_source",
           ingestion_status: "operational",
           last_success_at: fetchedAt,
           last_error_at: null,
           last_error_message: null,
-        })
+        }
+        : {
+          source_mode: "live_source",
+          ingestion_status: "degraded",
+          last_success_at: fetchedAt,
+          last_error_at: fetchedAt,
+          last_error_message:
+            "NASA EONET ingestion completed with partial provider coverage. Existing stored records were retained.",
+        };
+
+      const { error: sourceStatusError } = await db
+        .from("data_sources")
+        .update(sourceStatusUpdate)
         .eq("id", sourceId);
 
       if (sourceStatusError) {
-        throw new Error("Unable to update the EONET source operational state.");
+        throw new Error("Unable to update the EONET source state.");
       }
 
       const { error: completeRunError } = await db
@@ -1142,28 +1500,7 @@ const incidentUpdateCount = changedEvents.length;
           records_received: allEvents.length,
           records_created: recordsCreated,
           records_updated: recordsUpdated,
-          metadata: {
-            source: SOURCE_CODE,
-            categories: INCLUDED_CATEGORIES,
-            closed_lookback_days: CLOSED_LOOKBACK_DAYS,
-            endpoints,
-            result_limit: RESULT_LIMIT,
-            deduplicated_records: dedupedEvents.length,
-            normalized_records: normalizedEvents.length,
-            provider_warnings: providerWarnings,
-            skipped_invalid_records: skippedInvalidCount,
-            skipped_no_point_records: skippedNoPointCount,
-            provider_request_count: providerRequestCount,
-            max_provider_requests: MAX_EONET_PROVIDER_REQUESTS,
-            fetch_budget_ms: FETCH_BUDGET_MS,
-            closed_partition_strategy: CLOSED_PARTITION_STRATEGY,
-            closed_range_start: closedRangeStart,
-            closed_range_end: closedRangeEnd,
-            saturated_open_categories: saturatedOpenCategories,
-            closed_categories_requiring_partitions: closedCategoriesRequiringPartitions,
-            saturated_closed_categories: saturatedClosedCategories,
-            closed_partitions: closedPartitions,
-          },
+          metadata: providerMetadata,
         })
         .eq("id", ingestionRunId);
 
