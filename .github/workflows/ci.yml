@@ -33,7 +33,7 @@ jobs:
           deno-version: v2.x
 
       - name: Typecheck EONET Edge Function
-        run: deno check --no-prompt --import-map=supabase/functions/sync-eonet-events/deno.json supabase/functions/sync-eonet-events/index.ts
+        run: deno check --import-map=supabase/functions/sync-eonet-events/deno.json supabase/functions/sync-eonet-events/index.ts
 
       - name: Run EONET Deno tests
         run: deno test --allow-env --no-prompt --import-map=supabase/functions/sync-eonet-events/deno.json supabase/functions/sync-eonet-events
