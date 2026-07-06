@@ -153,6 +153,7 @@ const REQUEST_TIMEOUT_MS = EONET_RESILIENCE_LIMITS.requestTimeoutMs;
 const RETRY_BUDGET_GUARD_MS = EONET_RESILIENCE_LIMITS.retryBudgetGuardMs;
 const SOURCE_CODE = "eonet";
 const CLOSED_PARTITION_STRATEGY = "category-first-event-date-bisection";
+const DATABASE_LOOKUP_BATCH_SIZE = 100;
 
 const jsonHeaders = {
   "Content-Type": "application/json",
@@ -581,7 +582,15 @@ function dedupeByEventId(events: EonetEvent[]): EonetEvent[] {
 
   return [...eventById.values()];
 }
+function chunkValues<T>(values: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
 
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+
+  return chunks;
+}
 function fingerprintFromPayload(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -1266,50 +1275,82 @@ export default {
       const canonicalKeys = normalizedEvents.map((event) => event.canonicalKey);
       const sourceEventIds = normalizedEvents.map((event) => event.sourceEventId);
 
-      const { data: existingIncidents, error: existingIncidentsError } = canonicalKeys.length
-        ? await db
-          .from("incidents")
-          .select("id, canonical_key, title, hazard_type, status, source_updated_at")
-          .in("canonical_key", canonicalKeys)
-          .like("canonical_key", `${SOURCE_CODE}:%`)
-        : { data: [], error: null };
+      const existingIncidents: ExistingIncidentRow[] = [];
 
-      if (existingIncidentsError) {
-        throw new Error("Unable to check existing EONET incidents.");
-      }
+for (const canonicalKeyBatch of chunkValues(
+  canonicalKeys,
+  DATABASE_LOOKUP_BATCH_SIZE,
+)) {
+  const { data, error: existingIncidentsError } = await db
+    .from("incidents")
+    .select("id, canonical_key, title, hazard_type, status, source_updated_at")
+    .in("canonical_key", canonicalKeyBatch);
+
+  if (existingIncidentsError) {
+    console.error("EONET existing-incidents lookup failed:", {
+      code: existingIncidentsError.code ?? "unknown",
+    });
+
+    throw new Error("Unable to check existing EONET incidents.");
+  }
+
+  existingIncidents.push(...(data ?? []));
+}
 
       const existingIncidentByKey = new Map<string, ExistingIncidentRow>(
         (existingIncidents ?? []).map((incident) => [incident.canonical_key, incident]),
       );
       const existingKeys = new Set(existingIncidentByKey.keys());
 
-      const { data: existingSourceEvents, error: existingSourceEventsError } = sourceEventIds.length
-        ? await db
-          .from("source_events")
-          .select("source_event_id, source_updated_at, payload")
-          .eq("source_id", sourceId)
-          .in("source_event_id", sourceEventIds)
-        : { data: [], error: null };
+      const existingSourceEvents: ExistingSourceEventRow[] = [];
 
-      if (existingSourceEventsError) {
-        throw new Error("Unable to check existing EONET source events.");
-      }
+for (const sourceEventIdBatch of chunkValues(
+  sourceEventIds,
+  DATABASE_LOOKUP_BATCH_SIZE,
+)) {
+  const { data, error: existingSourceEventsError } = await db
+    .from("source_events")
+    .select("source_event_id, source_updated_at, payload")
+    .eq("source_id", sourceId)
+    .in("source_event_id", sourceEventIdBatch);
+
+  if (existingSourceEventsError) {
+    console.error("EONET existing-source-events lookup failed:", {
+      code: existingSourceEventsError.code ?? "unknown",
+    });
+
+    throw new Error("Unable to check existing EONET source events.");
+  }
+
+  existingSourceEvents.push(...(data ?? []));
+}
 
       const existingSourceEventById = new Map<string, ExistingSourceEventRow>(
         (existingSourceEvents ?? []).map((sourceEvent) => [sourceEvent.source_event_id, sourceEvent]),
       );
 
-      const { data: existingIncidentSources, error: existingIncidentSourcesError } = sourceEventIds.length
-        ? await db
-          .from("incident_sources")
-          .select("source_event_id, source_record_url, record_state, source_updated_at")
-          .eq("source_id", sourceId)
-          .in("source_event_id", sourceEventIds)
-        : { data: [], error: null };
+      const existingIncidentSources: ExistingIncidentSourceRow[] = [];
 
-      if (existingIncidentSourcesError) {
-        throw new Error("Unable to check existing EONET incident evidence records.");
-      }
+for (const sourceEventIdBatch of chunkValues(
+  sourceEventIds,
+  DATABASE_LOOKUP_BATCH_SIZE,
+)) {
+  const { data, error: existingIncidentSourcesError } = await db
+    .from("incident_sources")
+    .select("source_event_id, source_record_url, record_state, source_updated_at")
+    .eq("source_id", sourceId)
+    .in("source_event_id", sourceEventIdBatch);
+
+  if (existingIncidentSourcesError) {
+    console.error("EONET existing-incident-sources lookup failed:", {
+      code: existingIncidentSourcesError.code ?? "unknown",
+    });
+
+    throw new Error("Unable to check existing EONET incident evidence records.");
+  }
+
+  existingIncidentSources.push(...(data ?? []));
+}
 
       const existingIncidentSourceByEventId = new Map<string, ExistingIncidentSourceRow>(
   (existingIncidentSources ?? []).map((incidentSource) => [incidentSource.source_event_id, incidentSource]),
