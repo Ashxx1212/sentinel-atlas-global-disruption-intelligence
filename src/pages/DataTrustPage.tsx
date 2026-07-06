@@ -5,6 +5,8 @@ import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
 import { PageHeader, PrototypeNotice, SectionHeader } from '../components/ui';
 import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
 import type { LiveUsgsSourceStatus } from '../types/liveIntelligence';
+import { AuthGate } from '../components/AuthGate';
+import { SourceOperationsPanel } from '../components/SourceOperationsPanel';
 
 // Ingestion health timeline data (mock)
 const timelineEvents = [
@@ -156,13 +158,15 @@ export function DataTrustPage() {
   }, [records]);
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
-      <PageHeader
-        title="Data Trust"
-        subtitle="How Sentinel Atlas labels source-backed records, prototype fixtures, and data-integrity states."
-      >
-        <PrototypeNotice />
-      </PageHeader>
+  <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
+    <div id="public-data-trust" className="scroll-mt-24">
+  <PageHeader
+    title="Data Trust"
+    subtitle="How Sentinel Atlas labels source-backed records, prototype fixtures, and data-integrity states."
+  >
+    <PrototypeNotice />
+  </PageHeader>
+</div>
 
       {/* Integrity labels explanation */}
       <div className="mb-8">
@@ -234,6 +238,16 @@ export function DataTrustPage() {
             <PrototypeSourceCard key={sourceItem.id} source={sourceItem} />
           ))}
         </div>
+      </div>
+
+            {/* Authenticated Source Operations */}
+      <div className="mb-8">
+        <AuthGate
+          title="Source Operations"
+          description="Sign in to view sanitized ingestion history, safe run outcomes, retry summaries, and retained-record status."
+        >
+          <SourceOperationsPanel />
+        </AuthGate>
       </div>
 
       {/* Ingestion health timeline */}

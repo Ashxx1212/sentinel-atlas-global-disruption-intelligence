@@ -42,9 +42,28 @@ export function AuthGate({ children, title = 'Personalised workspace', descripti
               <Link to="/auth" className="btn-primary inline-flex items-center justify-center">
                 Sign in or create account
               </Link>
-              <Link to="/data-trust" className="btn-secondary inline-flex items-center justify-center">
-                Review public data trust
-              </Link>
+              <button
+  type="button"
+  onClick={() => {
+    const publicTrust = document.getElementById('public-data-trust');
+
+    if (publicTrust) {
+      publicTrust.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+      return;
+    }
+
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth',
+    });
+  }}
+  className="btn-secondary inline-flex items-center justify-center"
+>
+  Review public data trust
+</button>
             </div>
           </div>
         </div>
