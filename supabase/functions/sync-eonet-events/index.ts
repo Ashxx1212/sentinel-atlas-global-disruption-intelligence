@@ -169,7 +169,14 @@ const categoryToHazard: Record<EonetCategoryId, SentinelHazardType> = {
 };
 
 function safeErrorMessage(error: unknown): string {
-  function toJson(value: unknown): Json {
+  if (error instanceof Error) {
+    return error.message.slice(0, 500);
+  }
+
+  return "Unknown EONET ingestion error.";
+}
+
+function toJson(value: unknown): Json {
   if (value === null) {
     return null;
   }
@@ -203,12 +210,6 @@ function safeErrorMessage(error: unknown): string {
   }
 
   return null;
-}
-  if (error instanceof Error) {
-    return error.message.slice(0, 500);
-  }
-
-  return "Unknown EONET ingestion error.";
 }
 
 function isIncludedCategory(value: string | null | undefined): value is EonetCategoryId {
@@ -436,8 +437,8 @@ const changeFingerprint = JSON.stringify({
     categoryIds,
     changeFingerprint,
     payload: toJson({
-  raw_event: event,
-  sentinel_atlas: {
+      raw_event: event,
+      sentinel_atlas: {
         category_ids: categoryIds,
         change_fingerprint: changeFingerprint,
         current_point_geometry: currentPoint.geometry,
@@ -457,9 +458,10 @@ const changeFingerprint = JSON.stringify({
         record_state: recordState,
         severity_fallback: "advisory",
         source_record_url: sourceRecordUrl,
-     },
-  }),
-};
+      },
+    }),
+  };
+}
 
 function normalizeEvents(events: EonetEvent[]): {
   normalizedEvents: NormalizedEonetEvent[];
@@ -617,6 +619,7 @@ function dedupeByEventId(events: EonetEvent[]): EonetEvent[] {
 
   return [...eventById.values()];
 }
+
 function chunkValues<T>(values: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
 
@@ -626,6 +629,7 @@ function chunkValues<T>(values: readonly T[], size: number): T[][] {
 
   return chunks;
 }
+
 function fingerprintFromPayload(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -1186,19 +1190,19 @@ export default {
       }
 
       const activeSourceId = source.id;
-sourceId = activeSourceId;
+      sourceId = activeSourceId;
 
       const { data: ingestionRun, error: runError } = await db
         .from("ingestion_runs")
         .insert({
-          source_id: sourceId,
+          source_id: activeSourceId,
           status: "running",
           metadata: toJson({
-  source: SOURCE_CODE,
-  categories: [...INCLUDED_CATEGORIES],
-  closed_lookback_days: CLOSED_LOOKBACK_DAYS,
-  result_limit: RESULT_LIMIT,
-}),
+            source: SOURCE_CODE,
+            categories: [...INCLUDED_CATEGORIES],
+            closed_lookback_days: CLOSED_LOOKBACK_DAYS,
+            result_limit: RESULT_LIMIT,
+          }),
         })
         .select("id")
         .single();
@@ -1208,7 +1212,7 @@ sourceId = activeSourceId;
       }
 
       const activeIngestionRunId = ingestionRun.id;
-ingestionRunId = activeIngestionRunId;
+      ingestionRunId = activeIngestionRunId;
 
       const {
         allEvents,
@@ -1259,7 +1263,7 @@ ingestionRunId = activeIngestionRunId;
         final_provider_outcome: providerOutcome,
         retained_stored_records: providerOutcome !== "succeeded",
         provider_failure_summaries: providerFailureSummaries,
-});
+      });
 
       if (providerOutcome === "failed") {
         const safeFailureMessage =
@@ -1272,7 +1276,7 @@ ingestionRunId = activeIngestionRunId;
             last_error_at: fetchedAt,
             last_error_message: safeFailureMessage,
           })
-          .eq("id", sourceId);
+          .eq("id", activeSourceId);
 
         if (sourceStatusError) {
           throw new Error("Unable to update the EONET source degraded state.");
@@ -1289,7 +1293,7 @@ ingestionRunId = activeIngestionRunId;
             error_message: safeFailureMessage,
             metadata: providerMetadata,
           })
-          .eq("id", ingestionRunId);
+          .eq("id", activeIngestionRunId);
 
         if (completeRunError) {
           throw new Error("Unable to complete the failed EONET ingestion audit record.");
@@ -1314,99 +1318,99 @@ ingestionRunId = activeIngestionRunId;
 
       const existingIncidents: ExistingIncidentRow[] = [];
 
-for (const canonicalKeyBatch of chunkValues(
-  canonicalKeys,
-  DATABASE_LOOKUP_BATCH_SIZE,
-)) {
-  const { data, error: existingIncidentsError } = await db
-    .from("incidents")
-    .select("id, canonical_key, title, hazard_type, status, source_updated_at")
-    .in("canonical_key", canonicalKeyBatch);
+      for (const canonicalKeyBatch of chunkValues(
+        canonicalKeys,
+        DATABASE_LOOKUP_BATCH_SIZE,
+      )) {
+        const { data, error: existingIncidentsError } = await db
+          .from("incidents")
+          .select("id, canonical_key, title, hazard_type, status, source_updated_at")
+          .in("canonical_key", canonicalKeyBatch);
 
-  if (existingIncidentsError) {
-    console.error("EONET existing-incidents lookup failed:", {
-      code: existingIncidentsError.code ?? "unknown",
-    });
+        if (existingIncidentsError) {
+          console.error("EONET existing-incidents lookup failed:", {
+            code: existingIncidentsError.code ?? "unknown",
+          });
 
-    throw new Error("Unable to check existing EONET incidents.");
-  }
+          throw new Error("Unable to check existing EONET incidents.");
+        }
 
-  existingIncidents.push(...(data ?? []));
-}
+        existingIncidents.push(...(data ?? []));
+      }
 
       const existingIncidentByKey = new Map<string, ExistingIncidentRow>(
-  existingIncidents
-    .filter(
-      (incident): incident is ExistingIncidentRow & { canonical_key: string } =>
-        typeof incident.canonical_key === "string",
-    )
-    .map((incident) => [incident.canonical_key, incident] as const),
-);
+        existingIncidents
+          .filter(
+            (incident): incident is ExistingIncidentRow & { canonical_key: string } =>
+              typeof incident.canonical_key === "string",
+          )
+          .map((incident) => [incident.canonical_key, incident] as const),
+      );
       const existingKeys = new Set(existingIncidentByKey.keys());
 
       const existingSourceEvents: ExistingSourceEventRow[] = [];
 
-for (const sourceEventIdBatch of chunkValues(
-  sourceEventIds,
-  DATABASE_LOOKUP_BATCH_SIZE,
-)) {
-  const { data, error: existingSourceEventsError } = await db
-    .from("source_events")
-    .select("source_event_id, source_updated_at, payload")
-    .eq("source_id", activeSourceId)
-    .in("source_event_id", sourceEventIdBatch);
+      for (const sourceEventIdBatch of chunkValues(
+        sourceEventIds,
+        DATABASE_LOOKUP_BATCH_SIZE,
+      )) {
+        const { data, error: existingSourceEventsError } = await db
+          .from("source_events")
+          .select("source_event_id, source_updated_at, payload")
+          .eq("source_id", activeSourceId)
+          .in("source_event_id", sourceEventIdBatch);
 
-  if (existingSourceEventsError) {
-    console.error("EONET existing-source-events lookup failed:", {
-      code: existingSourceEventsError.code ?? "unknown",
-    });
+        if (existingSourceEventsError) {
+          console.error("EONET existing-source-events lookup failed:", {
+            code: existingSourceEventsError.code ?? "unknown",
+          });
 
-    throw new Error("Unable to check existing EONET source events.");
-  }
+          throw new Error("Unable to check existing EONET source events.");
+        }
 
-  existingSourceEvents.push(...(data ?? []));
-}
+        existingSourceEvents.push(...(data ?? []));
+      }
 
       const existingSourceEventById = new Map<string, ExistingSourceEventRow>(
-  existingSourceEvents
-    .filter(
-      (sourceEvent): sourceEvent is ExistingSourceEventRow & { source_event_id: string } =>
-        typeof sourceEvent.source_event_id === "string",
-    )
-    .map((sourceEvent) => [sourceEvent.source_event_id, sourceEvent] as const),
-);
+        existingSourceEvents
+          .filter(
+            (sourceEvent): sourceEvent is ExistingSourceEventRow & { source_event_id: string } =>
+              typeof sourceEvent.source_event_id === "string",
+          )
+          .map((sourceEvent) => [sourceEvent.source_event_id, sourceEvent] as const),
+      );
 
       const existingIncidentSources: ExistingIncidentSourceRow[] = [];
 
-for (const sourceEventIdBatch of chunkValues(
-  sourceEventIds,
-  DATABASE_LOOKUP_BATCH_SIZE,
-)) {
-  const { data, error: existingIncidentSourcesError } = await db
-    .from("incident_sources")
-    .select("source_event_id, source_record_url, record_state, source_updated_at")
-    .eq("source_id", sourceId)
-    .in("source_event_id", sourceEventIdBatch);
+      for (const sourceEventIdBatch of chunkValues(
+        sourceEventIds,
+        DATABASE_LOOKUP_BATCH_SIZE,
+      )) {
+        const { data, error: existingIncidentSourcesError } = await db
+          .from("incident_sources")
+          .select("source_event_id, source_record_url, record_state, source_updated_at")
+          .eq("source_id", activeSourceId)
+          .in("source_event_id", sourceEventIdBatch);
 
-  if (existingIncidentSourcesError) {
-    console.error("EONET existing-incident-sources lookup failed:", {
-      code: existingIncidentSourcesError.code ?? "unknown",
-    });
+        if (existingIncidentSourcesError) {
+          console.error("EONET existing-incident-sources lookup failed:", {
+            code: existingIncidentSourcesError.code ?? "unknown",
+          });
 
-    throw new Error("Unable to check existing EONET incident evidence records.");
-  }
+          throw new Error("Unable to check existing EONET incident evidence records.");
+        }
 
-  existingIncidentSources.push(...(data ?? []));
-}
+        existingIncidentSources.push(...(data ?? []));
+      }
 
       const existingIncidentSourceByEventId = new Map<string, ExistingIncidentSourceRow>(
-  existingIncidentSources
-    .filter(
-      (incidentSource): incidentSource is ExistingIncidentSourceRow & { source_event_id: string } =>
-        typeof incidentSource.source_event_id === "string",
-    )
-    .map((incidentSource) => [incidentSource.source_event_id, incidentSource] as const),
-);
+        existingIncidentSources
+          .filter(
+            (incidentSource): incidentSource is ExistingIncidentSourceRow & { source_event_id: string } =>
+              typeof incidentSource.source_event_id === "string",
+          )
+          .map((incidentSource) => [incidentSource.source_event_id, incidentSource] as const),
+      );
 
 const changedEvents = normalizedEvents.filter((event) =>
   meaningfulChangeOccurred(
@@ -1422,8 +1426,8 @@ if (normalizedEvents.length > 0) {
           .from("source_events")
           .upsert(
             normalizedEvents.map((event) => ({
-              source_id: activesourceId,
-              ingestion_run_id: activeIngestionRunId
+              source_id: activeSourceId,
+              ingestion_run_id: activeIngestionRunId,
               source_event_id: event.sourceEventId,
               source_updated_at: event.sourceUpdatedAt,
               fetched_at: fetchedAt,
@@ -1443,7 +1447,7 @@ if (normalizedEvents.length > 0) {
           .upsert(
             normalizedEvents.map((event) => ({
               canonical_key: event.canonicalKey,
-              primary_source_id: activeSourceId
+              primary_source_id: activeSourceId,
               hazard_type: event.hazardType,
               severity: event.severity,
               status: event.status,
@@ -1484,7 +1488,7 @@ if (normalizedEvents.length > 0) {
 
             return {
               incident_id: incidentId,
-              source_id: sourceId,
+              source_id: activeSourceId,
               source_event_id: event.sourceEventId,
               source_record_url: event.sourceRecordUrl,
               source_record_title: event.title,
@@ -1521,7 +1525,7 @@ if (normalizedEvents.length > 0) {
 
             return {
               incident_id: incidentId,
-              source_id: sourceId,
+              source_id: activeSourceId,
               update_type: isNew ? "source_record_ingested" : "source_record_updated",
               title: isNew ? "NASA EONET source record ingested" : "NASA EONET source record updated",
               body: event.isClosed
@@ -1579,7 +1583,7 @@ const incidentUpdateCount = changedEvents.length;
       const { error: sourceStatusError } = await db
         .from("data_sources")
         .update(sourceStatusUpdate)
-        .eq("id", activeSourceId)
+        .eq("id", activeSourceId);
 
       if (sourceStatusError) {
         throw new Error("Unable to update the EONET source state.");
@@ -1595,7 +1599,7 @@ const incidentUpdateCount = changedEvents.length;
           records_updated: recordsUpdated,
           metadata: providerMetadata,
         })
-        .eq("id", activeingestionRunId);
+        .eq("id", activeIngestionRunId);
 
       if (completeRunError) {
         throw new Error("Unable to complete the EONET ingestion audit record.");
@@ -1616,7 +1620,7 @@ const incidentUpdateCount = changedEvents.length;
           incident_update_count: incidentUpdateCount,
           provider_warning: providerWarnings.length > 0 ? providerWarnings.join(" ") : null,
           run_status: runStatus,
-          run_id: ingestionRunId,
+          run_id: activeIngestionRunId,
         },
         {
           headers: jsonHeaders,
