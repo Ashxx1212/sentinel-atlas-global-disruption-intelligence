@@ -5,7 +5,9 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  ListFilter,
   RefreshCw,
+  RotateCcw,
   Server,
   ShieldCheck,
   Timer,
@@ -19,6 +21,8 @@ import {
 } from '../lib/sourceOperations';
 
 type LoadState = 'loading' | 'ready' | 'empty' | 'error';
+type StatusFilter = 'all' | 'succeeded' | 'partial' | 'failed';
+type CoverageFilter = 'all' | 'attention';
 
 const statusStyles: Record<
   SourceOperationsRunStatus,
@@ -216,6 +220,9 @@ export function SourceOperationsPanel() {
   const [state, setState] = useState<LoadState>('loading');
   const [runs, setRuns] = useState<SourceOperationsRun[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>('all');
 
   const loadRuns = useCallback(async () => {
     setState('loading');
@@ -238,19 +245,62 @@ export function SourceOperationsPanel() {
     void loadRuns();
   }, [loadRuns]);
 
+  const sourceOptions = useMemo(() => {
+    const sources = new Map<string, string>();
+
+    runs.forEach((run) => {
+      sources.set(run.sourceCode, run.displayName);
+    });
+
+    return [...sources.entries()]
+      .map(([code, displayName]) => ({ code, displayName }))
+      .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  }, [runs]);
+
+  const visibleRuns = useMemo(() => {
+    return runs.filter((run) => {
+      if (sourceFilter !== 'all' && run.sourceCode !== sourceFilter) {
+        return false;
+      }
+
+      if (statusFilter !== 'all' && run.status !== statusFilter) {
+        return false;
+      }
+
+      if (
+        coverageFilter === 'attention' &&
+        run.status !== 'partial' &&
+        run.status !== 'failed'
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [coverageFilter, runs, sourceFilter, statusFilter]);
+
   const summary = useMemo(() => {
-    const partialOrFailed = runs.filter(
+    const partialOrFailed = visibleRuns.filter(
       (run) => run.status === 'partial' || run.status === 'failed',
     ).length;
-    const retries = runs.reduce((total, run) => total + run.retryCount, 0);
-    const sourceCount = new Set(runs.map((run) => run.sourceCode)).size;
+    const retries = visibleRuns.reduce((total, run) => total + run.retryCount, 0);
+    const sourceCount = new Set(visibleRuns.map((run) => run.sourceCode)).size;
 
     return {
       partialOrFailed,
       retries,
       sourceCount,
     };
-  }, [runs]);
+  }, [visibleRuns]);
+
+  const hasActiveFilters =
+    sourceFilter !== 'all' || statusFilter !== 'all' || coverageFilter !== 'all';
+
+  const resetFilters = () => {
+    setSourceFilter('all');
+    setStatusFilter('all');
+    setCoverageFilter('all');
+  };
 
   return (
     <section aria-labelledby="source-operations-heading">
@@ -275,27 +325,27 @@ export function SourceOperationsPanel() {
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
-          label="Recent runs"
-          value={runs.length}
-          hint="Read-only authenticated operational history"
+          label="Visible runs"
+          value={`${visibleRuns.length} / ${runs.length}`}
+          hint="Runs matching the current client-side filters"
           icon={Activity}
         />
         <SummaryCard
           label="Sources observed"
           value={summary.sourceCount}
-          hint="Distinct source codes in the latest run window"
+          hint="Distinct sources in the filtered run window"
           icon={Database}
         />
         <SummaryCard
           label="Partial or failed"
           value={summary.partialOrFailed}
-          hint="Runs with incomplete or unsuccessful provider coverage"
+          hint="Filtered runs with incomplete or unsuccessful coverage"
           icon={AlertTriangle}
         />
         <SummaryCard
           label="Retries observed"
           value={summary.retries}
-          hint="Bounded retries recorded in the returned run window"
+          hint="Bounded retries in the filtered run window"
           icon={Timer}
         />
       </div>
@@ -311,11 +361,83 @@ export function SourceOperationsPanel() {
             </span>
           </div>
           <p className="mt-2 max-w-4xl text-xs leading-relaxed text-slate-400">
-            This view exposes safe operational summaries only. Refresh reloads the stored run
-            history and does not trigger provider ingestion, scheduler jobs, or protected Edge
-            Functions.
+            This view exposes safe operational summaries only. Filters run in this browser over
+            the already-sanitized results. Refresh reloads stored history and does not trigger
+            provider ingestion, scheduler jobs, or protected Edge Functions.
           </p>
         </div>
+
+        {state === 'ready' ? (
+          <div className="border-b border-ink-700/70 bg-ink-900/40 px-4 py-4 lg:px-5">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-200">
+                <ListFilter className="h-4 w-4 text-cyan-300" />
+                Filter recent runs
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[720px]">
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-slate-400">Source</span>
+                  <select
+                    value={sourceFilter}
+                    onChange={(event) => setSourceFilter(event.target.value)}
+                    className="w-full rounded-lg border border-ink-600/70 bg-ink-950/80 px-3 py-2 text-sm text-slate-200 outline-none transition-colors focus:border-cyan-500/60"
+                  >
+                    <option value="all">All sources</option>
+                    {sourceOptions.map((source) => (
+                      <option key={source.code} value={source.code}>
+                        {source.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-slate-400">Outcome</span>
+                  <select
+                    value={statusFilter}
+                    onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+                    className="w-full rounded-lg border border-ink-600/70 bg-ink-950/80 px-3 py-2 text-sm text-slate-200 outline-none transition-colors focus:border-cyan-500/60"
+                  >
+                    <option value="all">All outcomes</option>
+                    <option value="succeeded">Succeeded</option>
+                    <option value="partial">Partial coverage</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-medium text-slate-400">Coverage</span>
+                  <select
+                    value={coverageFilter}
+                    onChange={(event) => setCoverageFilter(event.target.value as CoverageFilter)}
+                    className="w-full rounded-lg border border-ink-600/70 bg-ink-950/80 px-3 py-2 text-sm text-slate-200 outline-none transition-colors focus:border-cyan-500/60"
+                  >
+                    <option value="all">All coverage states</option>
+                    <option value="attention">Partial or failed only</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <p className="text-slate-500" aria-live="polite">
+                Showing {visibleRuns.length} of {runs.length} recent run{runs.length === 1 ? '' : 's'}.
+              </p>
+
+              {hasActiveFilters ? (
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="inline-flex items-center gap-1.5 text-cyan-300 transition-colors hover:text-cyan-200"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reset filters
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {state === 'loading' ? (
           <div className="space-y-0" aria-live="polite" aria-label="Loading source operations">
@@ -363,7 +485,27 @@ export function SourceOperationsPanel() {
           </div>
         ) : null}
 
-        {state === 'ready' ? (
+
+        {state === 'ready' && visibleRuns.length === 0 ? (
+          <div className="px-4 py-6 lg:px-5">
+            <div className="rounded-lg border border-ink-700/70 bg-ink-900/60 p-4">
+              <p className="text-sm font-medium text-slate-200">No recent runs match these filters.</p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                Reset the filters to return to the complete sanitized run window.
+              </p>
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Reset filters
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {state === 'ready' && visibleRuns.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="min-w-[1060px] w-full text-left">
               <thead className="border-b border-ink-700/70 bg-ink-900/60 text-xs uppercase tracking-[0.13em] text-slate-500">
@@ -377,7 +519,7 @@ export function SourceOperationsPanel() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-700/60">
-                {runs.map((run) => {
+                {visibleRuns.map((run) => {
                   const statusConfig = statusStyles[run.status];
 
                   const StatusIcon = statusConfig.icon;
@@ -422,7 +564,7 @@ export function SourceOperationsPanel() {
                           {run.retryCount.toLocaleString()} {run.retryCount === 1 ? 'retry' : 'retries'}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
-                          {run.retryableFailureCount.toLocaleString()} retryable failure{run.retryableFailureCount === 1 ? '' : 's'}
+                          {run.retryableFailureCount.toLocaleString()} retryable failure{run.retryableFailureCount === 1? '' : 's'}
                           {run.successfulResponseCount > 0
                             ? ` · ${run.successfulResponseCount.toLocaleString()} HTTP 200s`
                             : ''}
