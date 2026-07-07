@@ -58,6 +58,14 @@ type NormalizedGdacsEvent = {
   payload: Record<string, unknown>;
 };
 
+type AlertEvaluationSummary = {
+  status: "not_run" | "succeeded" | "failed";
+  candidate_incident_count: number;
+  matching_rule_location_count: number;
+  notifications_inserted: number;
+  error: string | null;
+};
+
 const GDACS_EVENT_LIST_URL = "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH";
 const SOURCE_CODE = "gdacs";
 const EVENT_TYPE = "TC";
@@ -68,7 +76,24 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const jsonHeaders = { "Content-Type": "application/json", Allow: "POST" };
 
 function safeErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message.slice(0, 500) : "Unknown GDACS ingestion error.";
+  if (error instanceof Error) {
+    return error.message.slice(0, 500);
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message.slice(0, 500);
+  }
+
+  return "Unknown GDACS ingestion error.";
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function normalizeOptionalText(value: string | null | undefined): string | null {
@@ -422,6 +447,15 @@ export default {
 
       const changedEvents = normalizedEvents.filter((event) => meaningfulChangeOccurred(event, existingIncidentByKey.get(event.canonicalKey), existingSourceEventById.get(event.sourceEventId), existingIncidentSourceByEventId.get(event.sourceEventId)));
 
+      let alertCandidateIncidentIds: string[] = [];
+      let alertEvaluation: AlertEvaluationSummary = {
+        status: "not_run",
+        candidate_incident_count: 0,
+        matching_rule_location_count: 0,
+        notifications_inserted: 0,
+        error: null,
+      };
+
       if (normalizedEvents.length > 0) {
         const { error: sourceEventsError } = await db.from("source_events").upsert(
           normalizedEvents.map((event) => ({ source_id: sourceId, ingestion_run_id: ingestionRunId, source_event_id: event.sourceEventId, source_updated_at: event.sourceUpdatedAt, fetched_at: fetchedAt, payload: event.payload })),
@@ -442,6 +476,10 @@ export default {
         ).select("id, canonical_key");
         if (incidentsError || !storedIncidents) throw new Error("Unable to upsert canonical GDACS incidents.");
         const incidentIdByCanonicalKey = new Map(storedIncidents.map((incident) => [incident.canonical_key, incident.id]));
+
+        alertCandidateIncidentIds = changedEvents
+          .map((event) => incidentIdByCanonicalKey.get(event.canonicalKey))
+          .filter((incidentId): incidentId is string => Boolean(incidentId));
 
         const incidentSourceRows = normalizedEvents.map((event) => {
           const incidentId = incidentIdByCanonicalKey.get(event.canonicalKey);
@@ -478,6 +516,51 @@ export default {
         }
       }
 
+      if (alertCandidateIncidentIds.length > 0) {
+        const { data: alertEvaluationData, error: alertEvaluationError } = await db
+          .rpc("evaluate_alert_candidates", {
+            p_incident_ids: alertCandidateIncidentIds,
+          });
+
+        if (alertEvaluationError) {
+          alertEvaluation = {
+            status: "failed",
+            candidate_incident_count: alertCandidateIncidentIds.length,
+            matching_rule_location_count: 0,
+            notifications_inserted: 0,
+            error: safeErrorMessage(alertEvaluationError),
+          };
+
+          console.error(
+            "GDACS alert evaluation failed; ingestion will continue:",
+            alertEvaluation.error,
+          );
+        } else {
+          const evaluationResult = Array.isArray(alertEvaluationData)
+            ? alertEvaluationData[0]
+            : alertEvaluationData;
+          const resultRecord =
+            evaluationResult &&
+            typeof evaluationResult === "object"
+              ? evaluationResult as Record<string, unknown>
+              : {};
+
+          alertEvaluation = {
+            status: "succeeded",
+            candidate_incident_count: numberOrZero(
+              resultRecord.candidate_incident_count,
+            ),
+            matching_rule_location_count: numberOrZero(
+              resultRecord.matching_rule_location_count,
+            ),
+            notifications_inserted: numberOrZero(
+              resultRecord.notifications_inserted,
+            ),
+            error: null,
+          };
+        }
+      }
+
       const recordsCreated = normalizedEvents.filter((event) => !existingKeys.has(event.canonicalKey)).length;
       const recordsUpdated = changedEvents.filter((event) => existingKeys.has(event.canonicalKey)).length;
       const resolvedClosedCount = changedEvents.filter((event) => !event.isActive && existingKeys.has(event.canonicalKey)).length;
@@ -492,7 +575,20 @@ export default {
       const { error: completeRunError } = await db.from("ingestion_runs").update({
         status: runStatus, completed_at: new Date().toISOString(), records_received: features.length,
         records_created: recordsCreated, records_updated: recordsUpdated,
-        metadata: { source: SOURCE_CODE, endpoint, event_types: [EVENT_TYPE], lookback_days: LOOKBACK_DAYS, page_size: PAGE_SIZE, pages_fetched: pagesFetched, max_pages: MAX_PAGES, normalized_records: normalizedEvents.length, provider_warnings: providerWarnings, skipped_invalid_records: skippedInvalidCount, skipped_no_point_records: skippedNoPointCount },
+        metadata: {
+          source: SOURCE_CODE,
+          endpoint,
+          event_types: [EVENT_TYPE],
+          lookback_days: LOOKBACK_DAYS,
+          page_size: PAGE_SIZE,
+          pages_fetched: pagesFetched,
+          max_pages: MAX_PAGES,
+          normalized_records: normalizedEvents.length,
+          provider_warnings: providerWarnings,
+          skipped_invalid_records: skippedInvalidCount,
+          skipped_no_point_records: skippedNoPointCount,
+          alert_evaluation: alertEvaluation,
+        },
       }).eq("id", ingestionRunId);
       if (completeRunError) throw new Error("Unable to complete GDACS ingestion audit record.");
 
@@ -502,6 +598,12 @@ export default {
         skipped_no_point_count: skippedNoPointCount, created_count: recordsCreated,
         updated_count: recordsUpdated, resolved_closed_count: resolvedClosedCount,
         incident_update_count: changedEvents.length,
+        alert_evaluation: {
+          status: alertEvaluation.status,
+          candidate_incident_count: alertEvaluation.candidate_incident_count,
+          matching_rule_location_count: alertEvaluation.matching_rule_location_count,
+          notifications_inserted: alertEvaluation.notifications_inserted,
+        },
         provider_warning: providerWarnings.length ? providerWarnings.join(" ") : null,
         run_status: runStatus, run_id: ingestionRunId,
       }, { headers: jsonHeaders });
