@@ -1,4 +1,5 @@
 import { withSupabase } from "npm:@supabase/server@^1";
+import type { Database, Json } from "./database.types.ts";
 
 type GdacsAlertLevel = "Green" | "Orange" | "Red";
 type SentinelSeverity = "advisory" | "elevated" | "high" | "critical";
@@ -74,6 +75,23 @@ const PAGE_SIZE = 100;
 const MAX_PAGES = 5;
 const REQUEST_TIMEOUT_MS = 20_000;
 const jsonHeaders = { "Content-Type": "application/json", Allow: "POST" };
+
+function toJson(value: unknown): Json {
+  if (value === null) return null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (Array.isArray(value)) return value.map((item) => toJson(item));
+
+  if (typeof value === "object") {
+    const jsonObject: { [key: string]: Json | undefined } = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (child !== undefined) jsonObject[key] = toJson(child);
+    }
+    return jsonObject;
+  }
+
+  return null;
+}
 
 function safeErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -387,7 +405,7 @@ async function fetchGdacsCyclones(): Promise<{
 }
 
 export default {
-  fetch: withSupabase({ auth: "none" }, async (request, context) => {
+  fetch: withSupabase<Database>({ auth: "none" }, async (request, context) => {
     if (request.method !== "POST") {
       return Response.json({ success: false, error: "Method not allowed. Use POST." }, { status: 405, headers: jsonHeaders });
     }
@@ -410,15 +428,17 @@ export default {
         .eq("code", SOURCE_CODE)
         .single();
       if (sourceError || !source) throw new Error("GDACS source registry record was not found.");
-      sourceId = source.id;
+      const activeSourceId = source.id;
+      sourceId = activeSourceId;
 
       const { data: ingestionRun, error: runError } = await db
         .from("ingestion_runs")
-        .insert({ source_id: sourceId, status: "running", metadata: { source: SOURCE_CODE, event_types: [EVENT_TYPE], lookback_days: LOOKBACK_DAYS, page_size: PAGE_SIZE, max_pages: MAX_PAGES } })
+        .insert({ source_id: activeSourceId, status: "running", metadata: toJson({ source: SOURCE_CODE, event_types: [EVENT_TYPE], lookback_days: LOOKBACK_DAYS, page_size: PAGE_SIZE, max_pages: MAX_PAGES }) })
         .select("id")
         .single();
       if (runError || !ingestionRun) throw new Error("Unable to create GDACS ingestion audit record.");
-      ingestionRunId = ingestionRun.id;
+      const activeIngestionRunId = ingestionRun.id;
+      ingestionRunId = activeIngestionRunId;
 
       const { endpoint, features, providerWarnings, pagesFetched } = await fetchGdacsCyclones();
       const { normalizedEvents: normalizedBeforeDedupe, skippedInvalidCount, skippedNoPointCount } = normalizeFeatures(features);
@@ -434,13 +454,13 @@ export default {
       const existingKeys = new Set(existingIncidentByKey.keys());
 
       const { data: existingSourceEvents, error: existingSourceEventsError } = sourceEventIds.length
-        ? await db.from("source_events").select("source_event_id, source_updated_at, payload").eq("source_id", sourceId).in("source_event_id", sourceEventIds)
+        ? await db.from("source_events").select("source_event_id, source_updated_at, payload").eq("source_id", activeSourceId).in("source_event_id", sourceEventIds)
         : { data: [], error: null };
       if (existingSourceEventsError) throw new Error("Unable to check existing GDACS source events.");
       const existingSourceEventById = new Map<string, ExistingSourceEventRow>((existingSourceEvents ?? []).map((event) => [event.source_event_id, event]));
 
       const { data: existingIncidentSources, error: existingIncidentSourcesError } = sourceEventIds.length
-        ? await db.from("incident_sources").select("source_event_id, source_record_url, record_state, source_updated_at").eq("source_id", sourceId).in("source_event_id", sourceEventIds)
+        ? await db.from("incident_sources").select("source_event_id, source_record_url, record_state, source_updated_at").eq("source_id", activeSourceId).in("source_event_id", sourceEventIds)
         : { data: [], error: null };
       if (existingIncidentSourcesError) throw new Error("Unable to check existing GDACS incident evidence records.");
       const existingIncidentSourceByEventId = new Map<string, ExistingIncidentSourceRow>((existingIncidentSources ?? []).map((event) => [event.source_event_id, event]));
@@ -458,14 +478,14 @@ export default {
 
       if (normalizedEvents.length > 0) {
         const { error: sourceEventsError } = await db.from("source_events").upsert(
-          normalizedEvents.map((event) => ({ source_id: sourceId, ingestion_run_id: ingestionRunId, source_event_id: event.sourceEventId, source_updated_at: event.sourceUpdatedAt, fetched_at: fetchedAt, payload: event.payload })),
+          normalizedEvents.map((event) => ({ source_id: activeSourceId, ingestion_run_id: activeIngestionRunId, source_event_id: event.sourceEventId, source_updated_at: event.sourceUpdatedAt, fetched_at: fetchedAt, payload: toJson(event.payload) })),
           { onConflict: "source_id,source_event_id" },
         );
         if (sourceEventsError) throw new Error("Unable to save GDACS source-event audit records.");
 
         const { data: storedIncidents, error: incidentsError } = await db.from("incidents").upsert(
           normalizedEvents.map((event) => ({
-            canonical_key: event.canonicalKey, primary_source_id: sourceId, hazard_type: event.hazardType,
+            canonical_key: event.canonicalKey, primary_source_id: activeSourceId, hazard_type: event.hazardType,
             severity: event.severity, status: event.status, integrity_status: "verified", data_mode: "live_source",
             title: event.title, summary: event.summary, place_name: event.placeName, latitude: event.latitude,
             longitude: event.longitude, event_time: event.eventTime, event_end_time: event.eventEndTime,
@@ -484,7 +504,7 @@ export default {
         const incidentSourceRows = normalizedEvents.map((event) => {
           const incidentId = incidentIdByCanonicalKey.get(event.canonicalKey);
           return incidentId ? {
-            incident_id: incidentId, source_id: sourceId, source_event_id: event.sourceEventId,
+            incident_id: incidentId, source_id: activeSourceId, source_event_id: event.sourceEventId,
             source_record_url: event.sourceRecordUrl, source_record_title: event.title, record_state: event.recordState,
             integrity_status: "verified", data_mode: "live_source", source_event_time: event.eventTime,
             source_updated_at: event.sourceUpdatedAt, fetched_at: fetchedAt,
@@ -500,7 +520,7 @@ export default {
           if (!incidentId) return null;
           const isNew = !existingKeys.has(event.canonicalKey);
           return {
-            incident_id: incidentId, source_id: sourceId,
+            incident_id: incidentId, source_id: activeSourceId,
             update_type: isNew ? "source_record_ingested" : "source_record_updated",
             title: isNew ? "GDACS cyclone source record ingested" : "GDACS cyclone source record updated",
             body: event.isActive
@@ -517,10 +537,16 @@ export default {
       }
 
       if (alertCandidateIncidentIds.length > 0) {
-        const { data: alertEvaluationData, error: alertEvaluationError } = await db
-          .rpc("evaluate_alert_candidates", {
+        const evaluateCandidatesRpc = db.rpc.bind(db) as unknown as (
+          functionName: string,
+          args: { p_incident_ids: string[] },
+        ) => Promise<{ data: unknown; error: unknown }>;
+        const { data: alertEvaluationData, error: alertEvaluationError } = await evaluateCandidatesRpc(
+          "evaluate_alert_candidates",
+          {
             p_incident_ids: alertCandidateIncidentIds,
-          });
+          },
+        );
 
         if (alertEvaluationError) {
           alertEvaluation = {
@@ -569,13 +595,13 @@ export default {
       const { error: sourceStatusError } = await db.from("data_sources").update({
         source_mode: "live_source", ingestion_status: "operational", last_success_at: fetchedAt,
         last_error_at: null, last_error_message: null,
-      }).eq("id", sourceId);
+      }).eq("id", activeSourceId);
       if (sourceStatusError) throw new Error("Unable to update the GDACS source operational state.");
 
       const { error: completeRunError } = await db.from("ingestion_runs").update({
         status: runStatus, completed_at: new Date().toISOString(), records_received: features.length,
         records_created: recordsCreated, records_updated: recordsUpdated,
-        metadata: {
+        metadata: toJson({
           source: SOURCE_CODE,
           endpoint,
           event_types: [EVENT_TYPE],
@@ -588,8 +614,8 @@ export default {
           skipped_invalid_records: skippedInvalidCount,
           skipped_no_point_records: skippedNoPointCount,
           alert_evaluation: alertEvaluation,
-        },
-      }).eq("id", ingestionRunId);
+        }),
+      }).eq("id", activeIngestionRunId);
       if (completeRunError) throw new Error("Unable to complete GDACS ingestion audit record.");
 
       return Response.json({
@@ -605,7 +631,7 @@ export default {
           notifications_inserted: alertEvaluation.notifications_inserted,
         },
         provider_warning: providerWarnings.length ? providerWarnings.join(" ") : null,
-        run_status: runStatus, run_id: ingestionRunId,
+        run_status: runStatus, run_id: activeIngestionRunId,
       }, { headers: jsonHeaders });
     } catch (error) {
       const errorMessage = safeErrorMessage(error);

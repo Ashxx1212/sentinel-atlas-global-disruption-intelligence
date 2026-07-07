@@ -1,4 +1,5 @@
 import { withSupabase } from "npm:@supabase/server@^1";
+import type { Database, Json } from "./database.types.ts";
 
 type UsgsProperties = {
   mag?: number | null;
@@ -103,6 +104,38 @@ function safeErrorMessage(error: unknown): string {
   }
 
   return "Unknown ingestion error.";
+}
+
+function toJson(value: unknown): Json {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => toJson(item));
+  }
+
+  if (typeof value === "object") {
+    const jsonObject: { [key: string]: Json | undefined } = {};
+
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (child !== undefined) {
+        jsonObject[key] = toJson(child);
+      }
+    }
+
+    return jsonObject;
+  }
+
+  return null;
 }
 
 function hasSourceRecordChanged(
@@ -245,7 +278,7 @@ async function fetchUsgsEarthquakes(): Promise<{
 }
 
 export default {
-  fetch: withSupabase({ auth: "none" }, async (request, context) => {
+  fetch: withSupabase<Database>({ auth: "none" }, async (request, context) => {
     if (request.method !== "POST") {
       return Response.json(
         {
@@ -296,19 +329,20 @@ if (
         throw new Error("USGS source registry record was not found.");
       }
 
-      sourceId = source.id;
+      const activeSourceId = source.id;
+      sourceId = activeSourceId;
 
       const { data: ingestionRun, error: runError } = await db
         .from("ingestion_runs")
         .insert({
-          source_id: sourceId,
+          source_id: activeSourceId,
           status: "running",
-          metadata: {
+          metadata: toJson({
             source: "usgs",
             lookback_days: LOOKBACK_DAYS,
             min_magnitude: MIN_MAGNITUDE,
             result_limit: RESULT_LIMIT,
-          },
+          }),
         })
         .select("id")
         .single();
@@ -317,7 +351,8 @@ if (
         throw new Error("Unable to create USGS ingestion audit record.");
       }
 
-      ingestionRunId = ingestionRun.id;
+      const activeIngestionRunId = ingestionRun.id;
+      ingestionRunId = activeIngestionRunId;
 
       const { earthquakes, endpoint } = await fetchUsgsEarthquakes();
       const normalizedEarthquakes = earthquakes
@@ -371,12 +406,12 @@ if (
           .from("source_events")
           .upsert(
             normalizedEarthquakes.map((earthquake) => ({
-              source_id: sourceId,
-              ingestion_run_id: ingestionRunId,
+              source_id: activeSourceId,
+              ingestion_run_id: activeIngestionRunId,
               source_event_id: earthquake.sourceEventId,
               source_updated_at: earthquake.sourceUpdatedAt,
               fetched_at: fetchedAt,
-              payload: earthquake.payload,
+              payload: toJson(earthquake.payload),
             })),
             {
               onConflict: "source_id,source_event_id",
@@ -392,7 +427,7 @@ if (
           .upsert(
             normalizedEarthquakes.map((earthquake) => ({
               canonical_key: earthquake.canonicalKey,
-              primary_source_id: sourceId,
+              primary_source_id: activeSourceId,
               hazard_type: "earthquake",
               severity: earthquake.severity,
               status: "active",
@@ -440,7 +475,7 @@ if (
 
             return {
               incident_id: incidentId,
-              source_id: sourceId,
+              source_id: activeSourceId,
               source_event_id: earthquake.sourceEventId,
               source_record_url: earthquake.sourceRecordUrl,
               source_record_title: earthquake.title,
@@ -479,7 +514,7 @@ if (
 
             return {
               incident_id: incidentId,
-              source_id: sourceId,
+              source_id: activeSourceId,
               update_type: "source_record_ingested",
               title: "USGS source record ingested",
               body:
@@ -504,10 +539,19 @@ if (
       }
 
       if (alertCandidateIncidentIds.length > 0) {
-        const { data: alertEvaluationData, error: alertEvaluationError } = await db
-          .rpc("evaluate_alert_candidates", {
+        // The committed database type snapshot is generated from the schema.
+        // Bind the client method so the evaluator remains callable even while
+        // generated RPC types are refreshed in a later maintenance change.
+        const evaluateCandidatesRpc = db.rpc.bind(db) as unknown as (
+          functionName: string,
+          args: { p_incident_ids: string[] },
+        ) => Promise<{ data: unknown; error: unknown }>;
+        const { data: alertEvaluationData, error: alertEvaluationError } = await evaluateCandidatesRpc(
+          "evaluate_alert_candidates",
+          {
             p_incident_ids: alertCandidateIncidentIds,
-          });
+          },
+        );
 
         if (alertEvaluationError) {
           alertEvaluation = {
@@ -567,7 +611,7 @@ if (
           last_error_at: null,
           last_error_message: null,
         })
-        .eq("id", sourceId);
+        .eq("id", activeSourceId);
 
       if (sourceStatusError) {
         throw new Error("Unable to update the USGS source operational state.");
@@ -581,7 +625,7 @@ if (
           records_received: earthquakes.length,
           records_created: recordsCreated,
           records_updated: recordsUpdated,
-          metadata: {
+          metadata: toJson({
             source: "usgs",
             endpoint,
             lookback_days: LOOKBACK_DAYS,
@@ -590,9 +634,9 @@ if (
             valid_records: normalizedEarthquakes.length,
             skipped_records: earthquakes.length - normalizedEarthquakes.length,
             alert_evaluation: alertEvaluation,
-          },
+          }),
         })
-        .eq("id", ingestionRunId);
+        .eq("id", activeIngestionRunId);
 
       if (completeRunError) {
         throw new Error("Unable to complete the USGS ingestion audit record.");
@@ -611,7 +655,7 @@ if (
             matching_rule_location_count: alertEvaluation.matching_rule_location_count,
             notifications_inserted: alertEvaluation.notifications_inserted,
           },
-          run_id: ingestionRunId,
+          run_id: activeIngestionRunId,
         },
         {
           headers: jsonHeaders,
