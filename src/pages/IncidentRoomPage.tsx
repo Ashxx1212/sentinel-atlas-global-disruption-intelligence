@@ -21,7 +21,6 @@ import {
   getIncidentById,
   getRelatedIncidents,
   hazardTypeLabels,
-  mockAlerts,
   mockWatchlist,
   mockSources,
 } from '../data/mockIncidents';
@@ -63,10 +62,6 @@ function formatTimestamp(iso: string): string {
 }
 
 // ── Right-rail relevance helpers ────────────────────────────
-
-function findMatchingAlerts(incident: Incident) {
-  return mockAlerts.filter((a) => a.incidentId === incident.id);
-}
 
 function findMatchingWatchlist(incident: Incident) {
   return mockWatchlist.filter((loc) =>
@@ -343,7 +338,6 @@ function ContextCards({ incident }: { incident: HybridIncident }) {
 
 function IntelligenceRail({ incident }: { incident: HybridIncident }) {
   const related = useMemo(() => getRelatedIncidents(incident).map(buildHybridIncidentFromFixture), [incident]);
-  const matchingAlerts = useMemo(() => findMatchingAlerts(incident), [incident]);
   const matchingWatchlist = useMemo(() => findMatchingWatchlist(incident), [incident]);
 
   return (
@@ -385,28 +379,34 @@ function IntelligenceRail({ incident }: { incident: HybridIncident }) {
         )}
       </div>
 
-      {/* Matching alert-rule explanation */}
+      {/* Private notification context */}
       <div className="panel p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-          Alert Rule Match
+        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          Notification Context
         </h3>
-        {matchingAlerts.length === 0 ? (
-          <p className="text-xs text-slate-500">
-            No prototype alert rules matched this incident.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {matchingAlerts.map((alert) => (
-              <div key={alert.id} className="rounded-lg border border-cyan-500/15 bg-cyan-500/5 p-2.5">
-                <div className="flex items-center gap-1.5">
-                  <Bell className="h-3 w-3 text-cyan-400" />
-                  <span className="text-xs font-medium text-slate-200">{alert.rule}</span>
-                </div>
-                <p className="mt-1 text-[10px] text-slate-500">{alert.message}</p>
-              </div>
-            ))}
+
+        <div className="flex items-start gap-2.5">
+          <Bell className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-cyan-400" />
+          <div>
+            <p className="text-xs font-medium text-slate-200">
+              Private notification inbox
+            </p>
+
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              Notifications for this incident appear only when a server-side alert
+              evaluator creates a private record for a signed-in account. This Incident
+              Room does not infer or fabricate alert matches.
+            </p>
+
+            <Link
+              to="/alerts"
+              className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+            >
+              Open Notification Centre
+              <ArrowLeft className="h-3 w-3 rotate-180" />
+            </Link>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Watched-location relevance */}

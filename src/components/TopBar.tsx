@@ -12,6 +12,7 @@ import {
   AlertOctagon,
   LogOut,
   Settings as SettingsIcon,
+  RefreshCw,
 } from 'lucide-react';
 import {
   mockIncidents,
@@ -21,7 +22,7 @@ import {
 } from '../data/mockIncidents';
 import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
 import { useAuth } from '../contexts/AuthContext';
-import { usePrototypeAlerts } from '../contexts/AlertContext';
+import { useNotifications } from '../contexts/NotificationContext';
 import { SeverityBadge } from './SeverityBadge';
 
 interface SearchResult {
@@ -52,10 +53,19 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
-  const { alerts, unreadCount, markAlertRead } = usePrototypeAlerts();
-  const latestAlerts = useMemo(
-    () => [...alerts].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 3),
-    [alerts],
+  const {
+    notifications,
+    unreadCount,
+    state: notificationState,
+    refreshNotifications,
+    markNotificationRead,
+  } = useNotifications();
+  const latestNotifications = useMemo(
+    () =>
+      [...notifications]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 3),
+    [notifications],
   );
   const { records, sources, state } = useLiveUsgsIncidents();
   const { isAuthenticated, user, profile, signOut, isConfigured } = useAuth();
@@ -396,64 +406,121 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
       {/* Notifications */}
       <div className="relative">
         <button
-          onClick={() => setNotifOpen((v) => !v)}
-          aria-label={`Alerts — ${unreadCount} unread`}
+          onClick={() => setNotifOpen((value) => !value)}
+          aria-label={
+            isAuthenticated
+              ? `Notifications — ${unreadCount} unread`
+              : 'Notifications — sign in required'
+          }
           className="relative rounded-lg p-2 text-slate-400 transition-colors hover:bg-ink-700/40 hover:text-slate-200"
         >
           <Bell className="h-5 w-5" />
-          {unreadCount > 0 && (
+          {isAuthenticated && unreadCount > 0 ? (
             <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-error-500 px-1 text-[10px] font-bold text-ink-950">
               {unreadCount}
             </span>
-          )}
+          ) : null}
         </button>
 
-        {notifOpen && (
+        {notifOpen ? (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setNotifOpen(false)} />
             <div className="absolute right-0 top-full mt-2 z-20 w-80 animate-slide-up">
               <div className="panel p-3">
                 <div className="flex items-center justify-between border-b border-ink-700/60 pb-2">
-                  <p className="text-sm font-semibold text-slate-200">Recent Alerts</p>
-                  <span className="text-[10px] text-slate-500">Prototype fixtures</span>
+                  <p className="text-sm font-semibold text-slate-200">Notifications</p>
+                  <span className="text-[10px] text-slate-500">
+                    {isAuthenticated ? 'Private inbox' : 'Sign in required'}
+                  </span>
                 </div>
-                <div className="mt-2 space-y-1.5">
-                  {latestAlerts.map((alert) => (
+
+                {!isAuthenticated ? (
+                  <div className="py-4">
+                    <p className="text-xs leading-relaxed text-slate-400">
+                      Sign in to view notifications that belong to your account and manage
+                      their read state.
+                    </p>
                     <button
-                      key={alert.id}
+                      type="button"
                       onClick={() => {
-                        markAlertRead(alert.id);
-                        navigate(`/incidents/${alert.incidentId}`);
+                        navigate(`/auth?next=${encodeURIComponent(location.pathname)}`);
                         setNotifOpen(false);
                       }}
-                      className="block w-full rounded-lg border border-ink-700/60 bg-ink-850/40 p-2.5 text-left transition-colors hover:border-cyan-500/20 hover:bg-ink-800/40"
+                      className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-500/10"
                     >
-                      <div className="flex items-center gap-2">
-                        <SeverityBadge severity={alert.severity} size="xs" />
-                        <span className="text-[10px] text-slate-500 truncate">
-                          {hazardTypeLabels[alert.hazardType]}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs font-medium text-slate-200 leading-snug truncate">
-                        {alert.title}
-                      </p>
+                      Sign in to your workspace
+                      <ArrowRight className="h-3 w-3" />
                     </button>
-                  ))}
-                </div>
+                  </div>
+                ) : notificationState === 'loading' ? (
+                  <div className="space-y-2 py-4" aria-live="polite">
+                    <div className="h-3 w-2/3 rounded-full skeleton-shimmer" />
+                    <div className="h-3 w-full rounded-full skeleton-shimmer" />
+                    <div className="h-3 w-4/5 rounded-full skeleton-shimmer" />
+                  </div>
+                ) : notificationState === 'error' ? (
+                  <div className="py-4">
+                    <p className="text-xs leading-relaxed text-slate-400">
+                      Private notifications could not be loaded.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void refreshNotifications();
+                      }}
+                      className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 hover:text-cyan-200"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Retry inbox
+                    </button>
+                  </div>
+                ) : latestNotifications.length === 0 ? (
+                  <div className="py-4">
+                    <p className="text-xs leading-relaxed text-slate-400">
+                      No private notifications have been created for this account yet.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mt-2 space-y-1.5">
+                    {latestNotifications.map((notification) => (
+                      <button
+                        key={notification.id}
+                        onClick={() => {
+                          void markNotificationRead(notification.id);
+                          navigate(`/incidents/${notification.incidentId}`);
+                          setNotifOpen(false);
+                        }}
+                        className="block w-full rounded-lg border border-ink-700/60 bg-ink-850/40 p-2.5 text-left transition-colors hover:border-cyan-500/20 hover:bg-ink-800/40"
+                      >
+                        <div className="flex items-center gap-2">
+                          <SeverityBadge severity={notification.severity} size="xs" />
+                          <span className="text-[10px] text-slate-500 truncate">
+                            {notification.matchingReason ?? 'Private in-app notification'}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs font-medium leading-snug text-slate-200 truncate">
+                          {notification.title}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <button
+                  type="button"
                   onClick={() => {
                     navigate('/alerts');
                     setNotifOpen(false);
                   }}
                   className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs font-medium text-cyan-300 transition-colors hover:bg-cyan-500/10"
                 >
-                  View all alerts
+                  View notification centre
                   <ArrowRight className="h-3 w-3" />
                 </button>
               </div>
             </div>
           </>
-        )}
+        ) : null}
       </div>
 
       {/* Profile */}

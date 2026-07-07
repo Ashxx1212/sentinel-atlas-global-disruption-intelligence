@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Bell, CheckCheck, AlertOctagon, Inbox, CheckCircle2, RefreshCw } from 'lucide-react';
-import { hazardTypeLabels } from '../data/mockIncidents';
-import type { AlertEntry, Severity } from '../types';
+import { Link } from 'react-router-dom';
+import {
+  AlertOctagon,
+  Bell,
+  CheckCheck,
+  CheckCircle2,
+  Inbox,
+  RefreshCw,
+} from 'lucide-react';
+import type { Severity } from '../types';
+import { AuthGate } from '../components/AuthGate';
 import { SeverityBadge } from '../components/SeverityBadge';
-import { PageHeader, PrototypeNotice, EmptyState } from '../components/ui';
-import { usePrototypeAlerts } from '../contexts/AlertContext';
+import { EmptyState, PageHeader } from '../components/ui';
+import { useNotifications } from '../contexts/NotificationContext';
+import type { NotificationRecord } from '../lib/notifications';
 
 type AlertTab = 'all' | 'unread' | 'high-priority';
 
@@ -15,15 +23,6 @@ const tabs: { value: AlertTab; label: string }[] = [
   { value: 'high-priority', label: 'High Priority' },
 ];
 
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
 const severityDot: Record<Severity, string> = {
   critical: 'bg-error-500',
   high: 'bg-orange-500',
@@ -31,13 +30,60 @@ const severityDot: Record<Severity, string> = {
   advisory: 'bg-slate-500',
 };
 
+function timeAgo(iso: string): string {
+  const timestamp = new Date(iso).getTime();
+
+  if (Number.isNaN(timestamp)) {
+    return 'Time unavailable';
+  }
+
+  const diff = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(diff / 60_000);
+
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function humanize(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function notificationModeLabel(notification: NotificationRecord): string {
+  return notification.dataMode === 'live_source'
+    ? 'Source-backed record'
+    : 'Prototype fixture';
+}
+
 export function AlertsPage() {
-  const { alerts, markAlertRead, markAllAlertsRead, resetPrototypeAlerts } = usePrototypeAlerts();
+  return (
+    <AuthGate
+      title="Notification Centre"
+      description="Sign in to view your private in-app notifications and manage their read state."
+    >
+      <AuthenticatedAlertsPage />
+    </AuthGate>
+  );
+}
+
+function AuthenticatedAlertsPage() {
+  const {
+    notifications,
+    unreadCount,
+    state,
+    errorMessage,
+    refreshNotifications,
+    markNotificationRead,
+    markAllNotificationsRead,
+  } = useNotifications();
   const [activeTab, setActiveTab] = useState<AlertTab>('all');
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
-
-  const navigate = useNavigate();
 
   const showToast = (message: string) => {
     if (toastTimerRef.current !== null) {
@@ -51,53 +97,66 @@ export function AlertsPage() {
     }, 2500);
   };
 
-  useEffect(() => () => {
-    if (toastTimerRef.current !== null) {
-      window.clearTimeout(toastTimerRef.current);
-    }
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
   }, []);
 
   const filtered = useMemo(() => {
     switch (activeTab) {
       case 'unread':
-        return alerts.filter((a) => !a.read);
+        return notifications.filter((notification) => !notification.readAt);
       case 'high-priority':
-        return alerts.filter((a) => a.severity === 'critical' || a.severity === 'high');
+        return notifications.filter(
+          (notification) =>
+            notification.severity === 'critical' || notification.severity === 'high',
+        );
       default:
-        return alerts;
+        return notifications;
     }
-  }, [alerts, activeTab]);
+  }, [activeTab, notifications]);
 
-  const unreadCount = alerts.filter((a) => !a.read).length;
-
-  const markAsReadAndToast = (id: string) => {
-    markAlertRead(id);
-    showToast('Alert marked as read');
+  const markAsReadAndToast = async (id: string) => {
+    const completed = await markNotificationRead(id);
+    showToast(
+      completed
+        ? 'Notification marked as read'
+        : 'Notification could not be marked as read',
+    );
   };
 
-  const openIncident = (alert: AlertEntry) => {
-    markAlertRead(alert.id);
-    navigate(`/incidents/${alert.incidentId}`);
-  };
-
-  const markAllRead = () => {
-    markAllAlertsRead();
-    showToast('All alerts marked as read');
+  const markAllRead = async () => {
+    const completed = await markAllNotificationsRead();
+    showToast(
+      completed
+        ? 'All notifications marked as read'
+        : 'Notifications could not be marked as read',
+    );
   };
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="Notification Centre"
-        subtitle="Alerts linked to Incident Rooms, filtered by your watchlist and alert rules. Uses prototype fixture data."
+        subtitle="Private in-app notifications for this account. Notification creation remains a server-side responsibility."
       >
-        <div className="flex items-center gap-3">
-          <PrototypeNotice className="hidden sm:flex" />
-        </div>
+        <button
+          type="button"
+          onClick={() => {
+            void refreshNotifications();
+          }}
+          disabled={state === 'loading'}
+          className="btn-secondary px-3 py-2 text-xs"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${state === 'loading' ? 'animate-spin' : ''}`} />
+          {state === 'loading' ? 'Loading...' : 'Refresh inbox'}
+        </button>
       </PageHeader>
 
-      {/* Stats + actions */}
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <span className="relative flex h-2.5 w-2.5">
@@ -110,132 +169,167 @@ export function AlertsPage() {
           </div>
           <span className="text-slate-600">·</span>
           <span className="text-sm text-slate-400">
-            <span className="font-mono">{alerts.length}</span> total
+            <span className="font-mono">{notifications.length}</span> total
           </span>
         </div>
+
         {unreadCount > 0 ? (
           <button
-            onClick={markAllRead}
+            type="button"
+            onClick={() => {
+              void markAllRead();
+            }}
             className="flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-cyan-300"
           >
             <CheckCheck className="h-3.5 w-3.5" />
             Mark all read
           </button>
-        ) : (
-          <button
-            onClick={() => {
-              resetPrototypeAlerts();
-              showToast('Demo alerts reset');
-            }}
-            className="flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-cyan-300"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Reset demo alerts
-          </button>
-        )}
+        ) : null}
       </div>
 
-      {/* Tabs */}
       <div className="mb-4 border-b border-ink-700/60">
         <div className="flex gap-1">
           {tabs.map((tab) => (
             <button
               key={tab.value}
+              type="button"
               onClick={() => setActiveTab(tab.value)}
               className={`tab-button ${activeTab === tab.value ? 'tab-button-active' : ''}`}
             >
               {tab.label}
-              {tab.value === 'unread' && unreadCount > 0 && (
+              {tab.value === 'unread' && unreadCount > 0 ? (
                 <span className="ml-1.5 rounded-full bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-mono text-cyan-300">
                   {unreadCount}
                 </span>
-              )}
+              ) : null}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Alert list */}
-      {filtered.length === 0 ? (
+      {state === 'loading' ? (
+        <div className="panel space-y-3 p-5" aria-live="polite">
+          <div className="h-4 w-40 rounded-full skeleton-shimmer" />
+          <div className="h-3 w-3/4 rounded-full skeleton-shimmer" />
+          <div className="h-3 w-2/3 rounded-full skeleton-shimmer" />
+        </div>
+      ) : null}
+
+      {state === 'error' ? (
+        <div className="panel border-l-2 border-l-warning-500 p-5">
+          <div className="flex items-start gap-3">
+            <AlertOctagon className="mt-0.5 h-4 w-4 flex-shrink-0 text-warning-300" />
+            <div>
+              <h2 className="text-sm font-semibold text-slate-200">
+                Private notifications are temporarily unavailable.
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                {errorMessage ?? 'Try refreshing this view.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  void refreshNotifications();
+                }}
+                className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 hover:text-cyan-200"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Retry inbox
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {(state === 'ready' || state === 'empty') && filtered.length === 0 ? (
         <EmptyState
           icon={Inbox}
-          title={activeTab === 'unread' ? 'All caught up' : 'No alerts in this view'}
+          title={
+            notifications.length === 0
+              ? 'No in-app notifications yet'
+              : activeTab === 'unread'
+                ? 'All caught up'
+                : 'No notifications in this view'
+          }
           message={
-            activeTab === 'unread'
-              ? 'No unread prototype alerts remain.'
-              : 'No prototype alerts match this view. New alerts will appear here when incidents match your rules.'
+            notifications.length === 0
+              ? 'No private notification records have been created for this account yet. Automated matching between incidents, watchlists, and alert rules is introduced separately on the server.'
+              : activeTab === 'unread'
+                ? 'No unread notifications remain.'
+                : 'No private notifications match this view.'
           }
         />
-      ) : (
-        <AlertList
+      ) : null}
+
+      {state === 'ready' && filtered.length > 0 ? (
+        <NotificationList
           filtered={filtered}
           activeTab={activeTab}
-          onOpen={openIncident}
           onMarkRead={markAsReadAndToast}
         />
-      )}
+      ) : null}
 
-      {/* Rule explanation */}
       <div className="mt-6 panel border-l-2 border-l-cyan-500/30 p-4">
         <div className="flex items-start gap-3">
-          <AlertOctagon className="h-4 w-4 flex-shrink-0 text-cyan-400 mt-0.5" />
+          <AlertOctagon className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-400" />
           <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-slate-200">How alerts work</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-semibold text-slate-200">
+                How this inbox works
+              </h3>
               <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide text-cyan-300">
-                Prototype alert rules
+                Private notification store
               </span>
             </div>
-            <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-              Alerts are generated when an active incident matches one of your alert rules.
-              Rules are based on hazard type, severity, and proximity to your watched
-              locations. Each alert links directly to its Incident Room for full context.
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+              This page reads notifications belonging only to the signed-in account.
+              You can mark notifications read, but browser code never creates them.
+              Automated incident matching and notification creation will be added as a
+              separate server-side evaluator.
             </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {['Critical severity', 'Within 500 km', 'Within 800 km', 'M5.0+ earthquakes', 'Cyclone watch', 'Flood alert'].map((rule) => (
-                <span key={rule} className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">
-                  {rule}
-                </span>
-              ))}
-            </div>
           </div>
         </div>
       </div>
 
-      {/* Toast notification */}
-      {toast && (
+      {toast ? (
         <div className="fixed bottom-6 right-6 z-50 animate-toast-in">
           <div className="panel flex items-center gap-2.5 px-4 py-3 shadow-lg shadow-black/40">
             <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-cyan-400" />
             <span className="text-sm text-slate-200">{toast}</span>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
-function AlertList({
+function NotificationList({
   filtered,
   activeTab,
-  onOpen,
   onMarkRead,
 }: {
-  filtered: AlertEntry[];
+  filtered: NotificationRecord[];
   activeTab: AlertTab;
-  onOpen: (alert: AlertEntry) => void;
-  onMarkRead: (id: string) => void;
+  onMarkRead: (id: string) => Promise<void>;
 }) {
-  const unreadAlerts = filtered.filter((a) => !a.read);
-  const readAlerts = filtered.filter((a) => a.read);
-  const showDivider = activeTab === 'all' && unreadAlerts.length > 0 && readAlerts.length > 0;
+  const unreadNotifications = filtered.filter((notification) => !notification.readAt);
+  const readNotifications = filtered.filter((notification) => notification.readAt);
+  const showDivider =
+    activeTab === 'all' &&
+    unreadNotifications.length > 0 &&
+    readNotifications.length > 0;
 
   return (
     <div className="space-y-3 stagger-children">
-      {unreadAlerts.map((alert) => (
-        <AlertCard key={alert.id} alert={alert} onOpen={onOpen} onMarkRead={onMarkRead} />
+      {unreadNotifications.map((notification) => (
+        <NotificationCard
+          key={notification.id}
+          notification={notification}
+          onMarkRead={onMarkRead}
+        />
       ))}
-      {showDivider && (
+
+      {showDivider ? (
         <div className="flex items-center gap-3 py-1">
           <div className="h-px flex-1 bg-ink-700/60" />
           <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
@@ -243,78 +337,96 @@ function AlertList({
           </span>
           <div className="h-px flex-1 bg-ink-700/60" />
         </div>
-      )}
-      {readAlerts.map((alert) => (
-        <AlertCard key={alert.id} alert={alert} onOpen={onOpen} onMarkRead={onMarkRead} />
+      ) : null}
+
+      {readNotifications.map((notification) => (
+        <NotificationCard
+          key={notification.id}
+          notification={notification}
+          onMarkRead={onMarkRead}
+        />
       ))}
     </div>
   );
 }
 
-function AlertCard({
-  alert,
-  onOpen,
+function NotificationCard({
+  notification,
   onMarkRead,
 }: {
-  alert: AlertEntry;
-  onOpen: (alert: AlertEntry) => void;
-  onMarkRead: (id: string) => void;
+  notification: NotificationRecord;
+  onMarkRead: (id: string) => Promise<void>;
 }) {
+  const isRead = Boolean(notification.readAt);
+
   return (
     <div
-      className={`panel transition-all duration-200 ${
-        alert.read
-          ? 'opacity-60'
-          : 'border-l-2 border-l-cyan-500'
-      } p-4`}
+      className={`panel p-4 transition-all duration-200 ${
+        isRead ? 'opacity-60' : 'border-l-2 border-l-cyan-500'
+      }`}
     >
       <div className="flex items-start gap-3">
         <div className="relative mt-1 flex-shrink-0">
-          <span className={`h-2.5 w-2.5 rounded-full ${severityDot[alert.severity]}`} />
-          {!alert.read && (
-            <span className={`absolute inset-0 h-2.5 w-2.5 rounded-full ${severityDot[alert.severity]} animate-ping-slow`} />
-          )}
+          <span className={`h-2.5 w-2.5 rounded-full ${severityDot[notification.severity]}`} />
+          {!isRead ? (
+            <span
+              className={`absolute inset-0 h-2.5 w-2.5 rounded-full ${severityDot[notification.severity]} animate-ping-slow`}
+            />
+          ) : null}
         </div>
+
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <SeverityBadge severity={alert.severity} size="xs" />
+          <div className="flex flex-wrap items-center gap-2">
+            <SeverityBadge severity={notification.severity} size="xs" />
             <span className="text-xs text-slate-500">
-              {hazardTypeLabels[alert.hazardType]}
+              {humanize(notification.integrityStatus)}
             </span>
-            {!alert.read && (
-              <span className="text-[10px] font-medium text-cyan-300">NEW</span>
-            )}
+            {!isRead ? <span className="text-[10px] font-medium text-cyan-300">NEW</span> : null}
           </div>
+
           <Link
-            to={`/incidents/${alert.incidentId}`}
-            onClick={() => onOpen(alert)}
+            to={`/incidents/${notification.incidentId}`}
+            onClick={() => {
+              void onMarkRead(notification.id);
+            }}
             className="mt-1.5 block text-sm font-semibold text-slate-100 transition-colors hover:text-cyan-300"
           >
-            {alert.title}
+            {notification.title}
           </Link>
-          <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-            {alert.message}
-          </p>
-          <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+
+          {notification.body ? (
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">
+              {notification.body}
+            </p>
+          ) : null}
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <span className="chip border-cyan-500/20 bg-cyan-500/5 text-cyan-300">
               <Bell className="h-3 w-3" />
-              {alert.rule}
+              {notification.matchingReason ?? 'Private in-app notification'}
             </span>
             <span className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">
-              {alert.location}
+              {notificationModeLabel(notification)}
             </span>
-            <span className="text-[10px] text-slate-500">{timeAgo(alert.timestamp)}</span>
+            <span className="text-[10px] text-slate-500">
+              {timeAgo(notification.createdAt)}
+            </span>
           </div>
         </div>
-        {!alert.read && (
+
+        {!isRead ? (
           <button
-            onClick={() => onMarkRead(alert.id)}
+            type="button"
+            onClick={() => {
+              void onMarkRead(notification.id);
+            }}
             className="flex-shrink-0 rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-ink-700/40 hover:text-slate-200"
             title="Mark as read"
+            aria-label="Mark notification as read"
           >
             <CheckCheck className="h-4 w-4" />
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );
