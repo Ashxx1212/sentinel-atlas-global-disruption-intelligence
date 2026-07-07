@@ -38,6 +38,19 @@ type NormalizedEarthquake = {
   payload: UsgsFeature;
 };
 
+type ExistingIncident = {
+  canonical_key: string;
+  source_updated_at: string | null;
+};
+
+type AlertEvaluationSummary = {
+  status: "not_run" | "succeeded" | "failed";
+  candidate_incident_count: number;
+  matching_rule_location_count: number;
+  notifications_inserted: number;
+  error: string | null;
+};
+
 const USGS_QUERY_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query";
 const LOOKBACK_DAYS = 7;
 const MIN_MAGNITUDE = 2.5;
@@ -80,7 +93,49 @@ function safeErrorMessage(error: unknown): string {
     return error.message.slice(0, 500);
   }
 
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message.slice(0, 500);
+  }
+
   return "Unknown ingestion error.";
+}
+
+function hasSourceRecordChanged(
+  earthquake: NormalizedEarthquake,
+  existingIncident: ExistingIncident | undefined,
+): boolean {
+  if (!existingIncident) {
+    return true;
+  }
+
+  if (!earthquake.sourceUpdatedAt) {
+    return false;
+  }
+
+  if (!existingIncident.source_updated_at) {
+    return true;
+  }
+
+  const incomingTimestamp = Date.parse(earthquake.sourceUpdatedAt);
+  const storedTimestamp = Date.parse(existingIncident.source_updated_at);
+
+  if (
+    Number.isFinite(incomingTimestamp) &&
+    Number.isFinite(storedTimestamp)
+  ) {
+    return incomingTimestamp !== storedTimestamp;
+  }
+
+  return earthquake.sourceUpdatedAt !== existingIncident.source_updated_at;
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function normalizeFeature(
@@ -276,7 +331,7 @@ if (
       const { data: existingIncidents, error: existingError } = canonicalKeys.length
         ? await db
           .from("incidents")
-          .select("canonical_key")
+          .select("canonical_key, source_updated_at")
           .in("canonical_key", canonicalKeys)
         : { data: [], error: null };
 
@@ -284,9 +339,32 @@ if (
         throw new Error("Unable to check existing Sentinel Atlas incidents.");
       }
 
-      const existingKeys = new Set(
-        (existingIncidents ?? []).map((incident) => incident.canonical_key),
+      const existingIncidentByCanonicalKey = new Map(
+        ((existingIncidents ?? []) as ExistingIncident[]).map((incident) => [
+          incident.canonical_key,
+          incident,
+        ]),
       );
+      const existingKeys = new Set(existingIncidentByCanonicalKey.keys());
+      const alertCandidateCanonicalKeys = new Set(
+        normalizedEarthquakes
+          .filter((earthquake) =>
+            hasSourceRecordChanged(
+              earthquake,
+              existingIncidentByCanonicalKey.get(earthquake.canonicalKey),
+            )
+          )
+          .map((earthquake) => earthquake.canonicalKey),
+      );
+
+      let alertCandidateIncidentIds: string[] = [];
+      let alertEvaluation: AlertEvaluationSummary = {
+        status: "not_run",
+        candidate_incident_count: 0,
+        matching_rule_location_count: 0,
+        notifications_inserted: 0,
+        error: null,
+      };
 
       if (normalizedEarthquakes.length > 0) {
         const { error: sourceEventsError } = await db
@@ -345,6 +423,10 @@ if (
         const incidentIdByCanonicalKey = new Map(
           storedIncidents.map((incident) => [incident.canonical_key, incident.id]),
         );
+
+        alertCandidateIncidentIds = Array.from(alertCandidateCanonicalKeys)
+          .map((canonicalKey) => incidentIdByCanonicalKey.get(canonicalKey))
+          .filter((incidentId): incidentId is string => Boolean(incidentId));
 
         const incidentSourceRows = normalizedEarthquakes
           .map((earthquake) => {
@@ -421,12 +503,59 @@ if (
         }
       }
 
+      if (alertCandidateIncidentIds.length > 0) {
+        const { data: alertEvaluationData, error: alertEvaluationError } = await db
+          .rpc("evaluate_alert_candidates", {
+            p_incident_ids: alertCandidateIncidentIds,
+          });
+
+        if (alertEvaluationError) {
+          alertEvaluation = {
+            status: "failed",
+            candidate_incident_count: alertCandidateIncidentIds.length,
+            matching_rule_location_count: 0,
+            notifications_inserted: 0,
+            error: safeErrorMessage(alertEvaluationError),
+          };
+
+          console.error(
+            "USGS alert evaluation failed; ingestion will continue:",
+            alertEvaluation.error,
+          );
+        } else {
+          const evaluationResult = Array.isArray(alertEvaluationData)
+            ? alertEvaluationData[0]
+            : alertEvaluationData;
+          const resultRecord =
+            evaluationResult &&
+            typeof evaluationResult === "object"
+              ? evaluationResult as Record<string, unknown>
+              : {};
+
+          alertEvaluation = {
+            status: "succeeded",
+            candidate_incident_count: numberOrZero(
+              resultRecord.candidate_incident_count,
+            ),
+            matching_rule_location_count: numberOrZero(
+              resultRecord.matching_rule_location_count,
+            ),
+            notifications_inserted: numberOrZero(
+              resultRecord.notifications_inserted,
+            ),
+            error: null,
+          };
+        }
+      }
+
       const recordsCreated = normalizedEarthquakes.filter(
         (earthquake) => !existingKeys.has(earthquake.canonicalKey),
       ).length;
 
-      const recordsUpdated = normalizedEarthquakes.filter((earthquake) =>
-        existingKeys.has(earthquake.canonicalKey),
+      const recordsUpdated = normalizedEarthquakes.filter(
+        (earthquake) =>
+          existingKeys.has(earthquake.canonicalKey) &&
+          alertCandidateCanonicalKeys.has(earthquake.canonicalKey),
       ).length;
 
       const { error: sourceStatusError } = await db
@@ -460,6 +589,7 @@ if (
             result_limit: RESULT_LIMIT,
             valid_records: normalizedEarthquakes.length,
             skipped_records: earthquakes.length - normalizedEarthquakes.length,
+            alert_evaluation: alertEvaluation,
           },
         })
         .eq("id", ingestionRunId);
@@ -475,6 +605,12 @@ if (
           records_received: earthquakes.length,
           records_created: recordsCreated,
           records_updated: recordsUpdated,
+          alert_evaluation: {
+            status: alertEvaluation.status,
+            candidate_incident_count: alertEvaluation.candidate_incident_count,
+            matching_rule_location_count: alertEvaluation.matching_rule_location_count,
+            notifications_inserted: alertEvaluation.notifications_inserted,
+          },
           run_id: ingestionRunId,
         },
         {
