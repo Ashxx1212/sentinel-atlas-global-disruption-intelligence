@@ -10,6 +10,7 @@ export interface PersistedAlertRule {
   id: string;
   user_id: string;
   watchlist_id: string | null;
+  watchlist_location_id: string | null;
   name: string;
   hazard_type: string | null;
   minimum_severity: AlertRuleSeverity;
@@ -24,6 +25,7 @@ export interface CreateAlertRuleInput {
   hazard_type: string | null;
   minimum_severity: AlertRuleSeverity;
   maximum_distance_km: number | null;
+  watchlist_location_id: string | null;
 }
 
 function mapAlertRule(row: AlertRuleRow): PersistedAlertRule {
@@ -31,6 +33,7 @@ function mapAlertRule(row: AlertRuleRow): PersistedAlertRule {
     id: row.id,
     user_id: row.user_id,
     watchlist_id: row.watchlist_id,
+    watchlist_location_id: row.watchlist_location_id,
     name: row.name,
     hazard_type: row.hazard_type,
     minimum_severity: row.minimum_severity,
@@ -94,6 +97,7 @@ export async function createAlertRule(
       hazard_type: input.hazard_type,
       minimum_severity: input.minimum_severity,
       maximum_distance_km: input.maximum_distance_km,
+      watchlist_location_id: input.watchlist_location_id,
       enabled: true,
     })
     .select('*')
@@ -122,6 +126,29 @@ export async function updateAlertRuleEnabled(
 
   if (error || !data) {
     throw new Error('Could not update alert rule.');
+  }
+
+  return mapAlertRule(data as AlertRuleRow);
+}
+
+export async function updateAlertRuleLocationScope(
+  client: SupabaseClient,
+  userId: string,
+  ruleId: string,
+  watchlistLocationId: string | null,
+): Promise<PersistedAlertRule> {
+  const { data, error } = await client
+    .from('alert_rules')
+    .update({
+      watchlist_location_id: watchlistLocationId,
+    })
+    .eq('id', ruleId)
+    .eq('user_id', userId)
+    .select('*')
+    .single();
+
+  if (error || !data) {
+    throw new Error('Could not update the alert rule location scope.');
   }
 
   return mapAlertRule(data as AlertRuleRow);

@@ -231,6 +231,7 @@ export type Database = {
           id: string;
           user_id: string;
           watchlist_id: string | null;
+          watchlist_location_id: string | null;
           name: string;
           hazard_type: string | null;
           minimum_severity: 'advisory' | 'elevated' | 'high' | 'critical';
@@ -243,6 +244,7 @@ export type Database = {
           id?: string;
           user_id: string;
           watchlist_id?: string | null;
+          watchlist_location_id?: string | null;
           name: string;
           hazard_type?: string | null;
           minimum_severity: 'advisory' | 'elevated' | 'high' | 'critical';
@@ -255,6 +257,7 @@ export type Database = {
           id?: string;
           user_id?: string;
           watchlist_id?: string | null;
+          watchlist_location_id?: string | null;
           name?: string;
           hazard_type?: string | null;
           minimum_severity?: 'advisory' | 'elevated' | 'high' | 'critical';

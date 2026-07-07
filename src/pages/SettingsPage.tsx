@@ -30,6 +30,7 @@ import {
   deleteAlertRule,
   fetchSavedAlertRules,
   updateAlertRuleEnabled,
+  updateAlertRuleLocationScope,
   type AlertRuleSeverity,
   type PersistedAlertRule,
 } from '../lib/alertRules';
@@ -79,6 +80,18 @@ function alertRuleDistanceLabel(maximumDistanceKm: number | null): string {
     : `${maximumDistanceKm.toLocaleString()} km maximum`;
 }
 
+function alertRuleLocationScopeLabel(
+  rule: PersistedAlertRule,
+  locations: PersistedWatchlistLocation[],
+): string {
+  if (!rule.watchlist_location_id) {
+    return 'All saved locations';
+  }
+
+  const location = locations.find((item) => item.id === rule.watchlist_location_id);
+  return location ? `Only ${location.label}` : 'Selected saved location';
+}
+
 function sortSavedLocations(locations: PersistedWatchlistLocation[]): PersistedWatchlistLocation[] {
   return [...locations].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
 }
@@ -96,6 +109,7 @@ export function SettingsPage() {
   const [draftRuleHazard, setDraftRuleHazard] = useState<string>('all');
   const [draftRuleSeverity, setDraftRuleSeverity] = useState<AlertRuleSeverity>('high');
   const [draftRuleDistanceCap, setDraftRuleDistanceCap] = useState<string>('watchlist-radius');
+  const [draftRuleLocationScope, setDraftRuleLocationScope] = useState<string>('all-locations');
   const [updatingRuleId, setUpdatingRuleId] = useState<string | null>(null);
   const [removingRuleId, setRemovingRuleId] = useState<string | null>(null);
   const [savedToast, setSavedToast] = useState(false);
@@ -401,6 +415,20 @@ export function SettingsPage() {
       return;
     }
 
+    const scopedRules = alertRules.filter(
+      (rule) => rule.watchlist_location_id === locationId,
+    );
+
+    if (scopedRules.length > 0) {
+      const location = savedLocations.find((item) => item.id === locationId);
+      const ruleNames = scopedRules.map((rule) => `"${rule.name}"`).join(', ');
+      setWatchlistError(
+        `${location?.label ?? 'This location'} is targeted by ${ruleNames}. Re-scope or remove the affected rule before deleting this location.`,
+      );
+      setWatchlistStatus('error');
+      return;
+    }
+
     setRemovingLocationId(locationId);
     setWatchlistStatus('removing');
     setWatchlistError(null);
@@ -444,6 +472,19 @@ export function SettingsPage() {
       return;
     }
 
+    const selectedLocationId =
+      draftRuleLocationScope === 'all-locations'
+        ? null
+        : draftRuleLocationScope;
+
+    if (
+      selectedLocationId &&
+      !savedLocations.some((location) => location.id === selectedLocationId)
+    ) {
+      setAlertRuleError('Choose a current saved location or apply this rule to all saved locations.');
+      return;
+    }
+
     const maximumDistanceKm =
       draftRuleDistanceCap === 'watchlist-radius'
         ? null
@@ -466,6 +507,7 @@ export function SettingsPage() {
         hazard_type: draftRuleHazard === 'all' ? null : draftRuleHazard,
         minimum_severity: draftRuleSeverity,
         maximum_distance_km: maximumDistanceKm,
+        watchlist_location_id: selectedLocationId,
       });
 
       if (!mountedRef.current) return;
@@ -475,6 +517,7 @@ export function SettingsPage() {
       setDraftRuleHazard('all');
       setDraftRuleSeverity('high');
       setDraftRuleDistanceCap('watchlist-radius');
+      setDraftRuleLocationScope('all-locations');
       setAlertRuleStatus('idle');
       showSavedToast();
     } catch {
@@ -511,6 +554,58 @@ export function SettingsPage() {
     } catch {
       if (!mountedRef.current) return;
       setAlertRuleError('Could not update this alert rule. Please try again.');
+      setAlertRuleStatus('error');
+    } finally {
+      if (mountedRef.current) {
+        setUpdatingRuleId(null);
+      }
+    }
+  };
+
+  const handleAlertRuleLocationScopeChange = async (
+    rule: PersistedAlertRule,
+    nextScope: string,
+  ) => {
+    if (!supabase || !user || updatingRuleId === rule.id) {
+      return;
+    }
+
+    const watchlistLocationId =
+      nextScope === 'all-locations'
+        ? null
+        : nextScope;
+
+    if (
+      watchlistLocationId &&
+      !savedLocations.some((location) => location.id === watchlistLocationId)
+    ) {
+      setAlertRuleError('Choose a current saved location or apply this rule to all saved locations.');
+      setAlertRuleStatus('error');
+      return;
+    }
+
+    setUpdatingRuleId(rule.id);
+    setAlertRuleStatus('updating');
+    setAlertRuleError(null);
+
+    try {
+      const updated = await updateAlertRuleLocationScope(
+        supabase,
+        user.id,
+        rule.id,
+        watchlistLocationId,
+      );
+
+      if (!mountedRef.current) return;
+
+      setAlertRules((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setAlertRuleStatus('idle');
+      showSavedToast();
+    } catch {
+      if (!mountedRef.current) return;
+      setAlertRuleError('Could not update the alert rule location scope. Please try again.');
       setAlertRuleStatus('error');
     } finally {
       if (mountedRef.current) {
@@ -818,13 +913,13 @@ export function SettingsPage() {
                   <Bell className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-300" />
                   <div>
                     <p className="text-sm font-medium text-slate-200">
-                      Rules apply to your Primary watchlist
+                      Rules can target all locations or one saved location
                     </p>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
                       This account currently has {savedLocations.length} saved monitoring
-                      location{savedLocations.length === 1 ? '' : 's'}. Future server-side
-                      matching will compare active incidents with these saved rules. Creating a
-                      rule does not create a notification yet.
+                      location{savedLocations.length === 1 ? '' : 's'}. Server-side matching
+                      evaluates newly changed active source records against these rules. A new
+                      rule does not backfill historic notifications.
                     </p>
                   </div>
                 </div>
@@ -843,7 +938,7 @@ export function SettingsPage() {
                       Create alert rule
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Each rule is private to this account and its primary watchlist.
+                      Each rule is private to this account. Choose all saved locations or one specific location.
                     </p>
                   </div>
                   <span className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">
@@ -896,6 +991,30 @@ export function SettingsPage() {
                         </option>
                       ))}
                     </select>
+                  </label>
+
+                  <label className="block sm:col-span-2">
+                    <span className="text-xs font-medium text-slate-400">
+                      Target location
+                    </span>
+                    <select
+                      value={draftRuleLocationScope}
+                      onChange={(event) => setDraftRuleLocationScope(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-ink-700/60 bg-ink-850/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                    >
+                      <option value="all-locations">
+                        All saved locations in Primary watchlist
+                      </option>
+                      {savedLocations.map((location) => (
+                        <option key={location.id} value={location.id}>
+                          Only {location.label} · {location.place_name}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="mt-1 block text-[10px] leading-relaxed text-slate-600">
+                      A single-location rule checks only that saved location. An all-location
+                      rule keeps the existing nearest-match behaviour across your watchlist.
+                    </span>
                   </label>
 
                   <label className="block sm:col-span-2">
@@ -961,7 +1080,7 @@ export function SettingsPage() {
                       Saved alert rules
                     </p>
                     <p className="mt-1 text-[11px] text-slate-600">
-                      Primary watchlist only
+                      Choose scope per rule
                     </p>
                   </div>
 
@@ -990,8 +1109,8 @@ export function SettingsPage() {
                   <p className="mt-3 text-sm text-slate-500">Loading saved alert rules...</p>
                 ) : alertRules.length === 0 ? (
                   <p className="mt-3 text-sm leading-relaxed text-slate-500">
-                    No saved alert rules yet. Create one above to store the matching criteria
-                    a future server-side evaluator will use.
+                    No saved alert rules yet. Create one above to match newly changed active
+                    source records against a saved location scope.
                   </p>
                 ) : (
                   <div className="mt-3 space-y-2">
@@ -1023,8 +1142,35 @@ export function SettingsPage() {
                               <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
                                 {alertRuleHazardLabel(rule.hazard_type)} ·{' '}
                                 {humanize(rule.minimum_severity)} or higher ·{' '}
-                                {alertRuleDistanceLabel(rule.maximum_distance_km)}
+                                {alertRuleDistanceLabel(rule.maximum_distance_km)} ·{' '}
+                                {alertRuleLocationScopeLabel(rule, savedLocations)}
                               </p>
+                              <label className="mt-3 block max-w-sm">
+                                <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                                  Target scope
+                                </span>
+                                <select
+                                  value={rule.watchlist_location_id ?? 'all-locations'}
+                                  onChange={(event) =>
+                                    void handleAlertRuleLocationScopeChange(
+                                      rule,
+                                      event.target.value,
+                                    )
+                                  }
+                                  disabled={updating || removing}
+                                  className="mt-1 w-full rounded border border-ink-700/60 bg-ink-850/60 px-2 py-1.5 text-xs text-slate-300 focus:border-cyan-500/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                                  aria-label={`Target scope for ${rule.name}`}
+                                >
+                                  <option value="all-locations">
+                                    All saved locations
+                                  </option>
+                                  {savedLocations.map((location) => (
+                                    <option key={location.id} value={location.id}>
+                                      Only {location.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
                             </div>
 
                             <div className="flex items-center gap-2">
@@ -1082,8 +1228,8 @@ export function SettingsPage() {
                     <div>
                       <p className="font-medium text-slate-200">In-app notification inbox</p>
                       <p className="mt-1 leading-relaxed text-slate-500">
-                        Private inbox is ready. A server-side evaluator will create matching
-                        notifications later.
+                        Private inbox receives source-backed matches from the server-side evaluator.
+                        It is not an official emergency-warning channel.
                       </p>
                     </div>
                     <span className="whitespace-nowrap text-cyan-300">Ready</span>
