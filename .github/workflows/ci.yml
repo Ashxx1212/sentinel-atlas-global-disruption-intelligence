@@ -21,16 +21,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck
+      - name: Typecheck browser application
         run: npm run typecheck
 
-      - name: Build
+      - name: Lint application and Edge Function source
+        run: npm run lint
+
+      - name: Build browser application
         run: npm run build
 
       - name: Set up Deno
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+
+      - name: Typecheck USGS Edge Function
+        run: deno check --node-modules-dir=auto --import-map=supabase/functions/sync-usgs-earthquakes/deno.json supabase/functions/sync-usgs-earthquakes/index.ts
+
+      - name: Typecheck GDACS Edge Function
+        run: deno check --node-modules-dir=auto --import-map=supabase/functions/sync-gdacs-events/deno.json supabase/functions/sync-gdacs-events/index.ts
 
       - name: Typecheck EONET Edge Function
         run: deno check --node-modules-dir=auto --import-map=supabase/functions/sync-eonet-events/deno.json supabase/functions/sync-eonet-events/index.ts

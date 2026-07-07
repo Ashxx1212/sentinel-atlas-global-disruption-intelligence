@@ -72,10 +72,10 @@ function isSameSavedLocation(
   return samePlace && sameCoordinates;
 }
 
-export async function ensureDefaultWatchlist(
+async function findDefaultWatchlistId(
   client: SupabaseClient,
   userId: string,
-): Promise<string> {
+): Promise<string | null> {
   const { data, error } = await client
     .from('watchlists')
     .select('id')
@@ -87,8 +87,17 @@ export async function ensureDefaultWatchlist(
     throw error;
   }
 
-  if (data?.id) {
-    return data.id;
+  return data?.id ?? null;
+}
+
+export async function ensureDefaultWatchlist(
+  client: SupabaseClient,
+  userId: string,
+): Promise<string> {
+  const existingId = await findDefaultWatchlistId(client, userId);
+
+  if (existingId) {
+    return existingId;
   }
 
   const { data: created, error: createError } = await client
@@ -101,11 +110,22 @@ export async function ensureDefaultWatchlist(
     .select('id')
     .single();
 
-  if (createError || !created) {
-    throw createError ?? new Error('Unable to create a personal watchlist.');
+  if (created?.id) {
+    return created.id;
   }
 
-  return created.id;
+  // A second browser tab can race this insert. The database migration adds a
+  // one-default-watchlist index, so on that specific conflict we re-read the
+  // row created by the winning request instead of surfacing a false failure.
+  if (createError?.code === '23505') {
+    const racedId = await findDefaultWatchlistId(client, userId);
+
+    if (racedId) {
+      return racedId;
+    }
+  }
+
+  throw createError ?? new Error('Unable to create a personal watchlist.');
 }
 
 export async function fetchSavedWatchlistLocations(

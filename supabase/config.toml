@@ -413,6 +413,12 @@ enabled = true
 # JSON string passed through to pg-delta SQL formatting.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
 
+[functions.search-locations]
+enabled = true
+verify_jwt = true
+import_map = "./functions/search-locations/deno.json"
+entrypoint = "./functions/search-locations/index.ts"
+
 [functions.sync-usgs-earthquakes]
 enabled = true
 verify_jwt = false

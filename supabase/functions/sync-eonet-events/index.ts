@@ -101,6 +101,14 @@ type ExistingIncidentSourceRow = {
   source_updated_at?: string | null;
 };
 
+type AlertEvaluationSummary = {
+  status: "not_run" | "succeeded" | "failed";
+  candidate_incident_count: number;
+  matching_rule_location_count: number;
+  notifications_inserted: number;
+  error: string | null;
+};
+
 type ClosedPartitionOutcome =
   | "accepted"
   | "split"
@@ -173,7 +181,27 @@ function safeErrorMessage(error: unknown): string {
     return error.message.slice(0, 500);
   }
 
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message.slice(0, 500);
+  }
+
   return "Unknown EONET ingestion error.";
+}
+
+function numberOrZero(value: unknown): number {
+  const numericValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+
+  return Number.isFinite(numericValue) ? numericValue : 0;
 }
 
 function toJson(value: unknown): Json {
@@ -210,10 +238,6 @@ function toJson(value: unknown): Json {
   }
 
   return null;
-}
-
-function isIncludedCategory(value: string | null | undefined): value is EonetCategoryId {
-  return INCLUDED_CATEGORIES.includes(value as EonetCategoryId);
 }
 
 function timestampFromIso(value: string | null | undefined): string | null {
@@ -1237,7 +1261,15 @@ export default {
         providerFailureSummaryCount: providerFailureSummaries.length,
         providerWarningCount: providerWarnings.length,
       });
-      const providerMetadata = toJson({
+      let alertEvaluation: AlertEvaluationSummary = {
+        status: "not_run",
+        candidate_incident_count: 0,
+        matching_rule_location_count: 0,
+        notifications_inserted: 0,
+        error: null,
+      };
+
+      const providerMetadata = {
         source: SOURCE_CODE,
         categories: [...INCLUDED_CATEGORIES],
         closed_lookback_days: CLOSED_LOOKBACK_DAYS,
@@ -1263,7 +1295,8 @@ export default {
         final_provider_outcome: providerOutcome,
         retained_stored_records: providerOutcome !== "succeeded",
         provider_failure_summaries: providerFailureSummaries,
-      });
+      };
+
 
       if (providerOutcome === "failed") {
         const safeFailureMessage =
@@ -1291,7 +1324,10 @@ export default {
             records_created: 0,
             records_updated: 0,
             error_message: safeFailureMessage,
-            metadata: providerMetadata,
+            metadata: toJson({
+              ...providerMetadata,
+              alert_evaluation: alertEvaluation,
+            }),
           })
           .eq("id", activeIngestionRunId);
 
@@ -1413,15 +1449,17 @@ export default {
       );
 
 const changedEvents = normalizedEvents.filter((event) =>
-  meaningfulChangeOccurred(
-    event,
-    existingIncidentByKey.get(event.canonicalKey),
-    existingSourceEventById.get(event.sourceEventId),
-    existingIncidentSourceByEventId.get(event.sourceEventId),
-  ),
-);
+        meaningfulChangeOccurred(
+          event,
+          existingIncidentByKey.get(event.canonicalKey),
+          existingSourceEventById.get(event.sourceEventId),
+          existingIncidentSourceByEventId.get(event.sourceEventId),
+        ),
+      );
 
-if (normalizedEvents.length > 0) {
+      let alertCandidateIncidentIds: string[] = [];
+
+      if (normalizedEvents.length > 0) {
         const { error: sourceEventsError } = await db
           .from("source_events")
           .upsert(
@@ -1478,6 +1516,11 @@ if (normalizedEvents.length > 0) {
         const incidentIdByCanonicalKey = new Map(
           storedIncidents.map((incident) => [incident.canonical_key, incident.id]),
         );
+
+        alertCandidateIncidentIds = changedEvents
+          .filter((event) => event.isActive)
+          .map((event) => incidentIdByCanonicalKey.get(event.canonicalKey))
+          .filter((incidentId): incidentId is string => Boolean(incidentId));
 
         const incidentSourceRows = normalizedEvents
           .map((event) => {
@@ -1549,19 +1592,72 @@ if (normalizedEvents.length > 0) {
         }
       }
 
+      if (alertCandidateIncidentIds.length > 0) {
+        const evaluateCandidatesRpc = db.rpc.bind(db) as unknown as (
+          functionName: string,
+          args: { p_incident_ids: string[] },
+        ) => Promise<{ data: unknown; error: unknown }>;
+
+        const {
+          data: alertEvaluationData,
+          error: alertEvaluationError,
+        } = await evaluateCandidatesRpc(
+          "evaluate_alert_candidates",
+          { p_incident_ids: alertCandidateIncidentIds },
+        );
+
+        if (alertEvaluationError) {
+          alertEvaluation = {
+            status: "failed",
+            candidate_incident_count: alertCandidateIncidentIds.length,
+            matching_rule_location_count: 0,
+            notifications_inserted: 0,
+            error: safeErrorMessage(alertEvaluationError),
+          };
+
+          console.error(
+            "EONET alert evaluation failed; ingestion will continue:",
+            alertEvaluation.error,
+          );
+        } else {
+          const evaluationResult = Array.isArray(alertEvaluationData)
+            ? alertEvaluationData[0]
+            : alertEvaluationData;
+          const resultRecord =
+            evaluationResult &&
+            typeof evaluationResult === "object"
+              ? evaluationResult as Record<string, unknown>
+              : {};
+
+          alertEvaluation = {
+            status: "succeeded",
+            candidate_incident_count: numberOrZero(
+              resultRecord.candidate_incident_count,
+            ),
+            matching_rule_location_count: numberOrZero(
+              resultRecord.matching_rule_location_count,
+            ),
+            notifications_inserted: numberOrZero(
+              resultRecord.notifications_inserted,
+            ),
+            error: null,
+          };
+        }
+      }
+
       const recordsCreated = normalizedEvents.filter(
-  (event) => !existingKeys.has(event.canonicalKey),
-).length;
+        (event) => !existingKeys.has(event.canonicalKey),
+      ).length;
 
-const recordsUpdated = changedEvents.filter(
-  (event) => existingKeys.has(event.canonicalKey),
-).length;
+      const recordsUpdated = changedEvents.filter(
+        (event) => existingKeys.has(event.canonicalKey),
+      ).length;
 
-const resolvedClosedCount = changedEvents.filter(
-  (event) => event.isClosed && existingKeys.has(event.canonicalKey),
-).length;
+      const resolvedClosedCount = changedEvents.filter(
+        (event) => event.isClosed && existingKeys.has(event.canonicalKey),
+      ).length;
 
-const incidentUpdateCount = changedEvents.length;
+      const incidentUpdateCount = changedEvents.length;
       const runStatus = providerOutcome;
       const sourceStatusUpdate = runStatus === "succeeded"
         ? {
@@ -1597,7 +1693,10 @@ const incidentUpdateCount = changedEvents.length;
           records_received: allEvents.length,
           records_created: recordsCreated,
           records_updated: recordsUpdated,
-          metadata: providerMetadata,
+          metadata: toJson({
+            ...providerMetadata,
+            alert_evaluation: alertEvaluation,
+          }),
         })
         .eq("id", activeIngestionRunId);
 
@@ -1620,6 +1719,12 @@ const incidentUpdateCount = changedEvents.length;
           incident_update_count: incidentUpdateCount,
           provider_warning: providerWarnings.length > 0 ? providerWarnings.join(" ") : null,
           run_status: runStatus,
+          alert_evaluation: {
+            status: alertEvaluation.status,
+            candidate_incident_count: alertEvaluation.candidate_incident_count,
+            matching_rule_location_count: alertEvaluation.matching_rule_location_count,
+            notifications_inserted: alertEvaluation.notifications_inserted,
+          },
           run_id: activeIngestionRunId,
         },
         {
