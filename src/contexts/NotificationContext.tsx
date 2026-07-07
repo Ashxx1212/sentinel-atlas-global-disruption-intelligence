@@ -14,6 +14,7 @@ import {
   markNotificationRead,
   type NotificationRecord,
 } from '../lib/notifications';
+import { supabase } from '../lib/supabase';
 
 export type NotificationLoadState =
   | 'loading'
@@ -41,7 +42,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<NotificationLoadState>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const refreshNotifications = useCallback(async () => {
+  const refreshNotifications = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+
     if (authLoading) {
       setState('loading');
       return;
@@ -61,7 +64,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    setState('loading');
+    if (!silent) {
+      setState('loading');
+    }
     setErrorMessage(null);
 
     try {
@@ -69,7 +74,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       setNotifications(nextNotifications);
       setState(nextNotifications.length > 0 ? 'ready' : 'empty');
     } catch {
-      setNotifications([]);
+      if (!silent) {
+        setNotifications([]);
+      }
       setErrorMessage(
         'Private notifications could not be loaded. Try refreshing this view.',
       );
@@ -80,6 +87,38 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshNotifications();
   }, [refreshNotifications]);
+
+  useEffect(() => {
+    const supabaseClient = supabase;
+
+    if (authLoading || !isConfigured || !isAuthenticated || !user || !supabaseClient) {
+      return;
+    }
+
+    const channel = supabaseClient
+      .channel(`private-notifications:${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          void refreshNotifications({ silent: true });
+        },
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          void refreshNotifications({ silent: true });
+        }
+      });
+
+    return () => {
+      void supabaseClient.removeChannel(channel);
+    };
+  }, [authLoading, isAuthenticated, isConfigured, refreshNotifications, user]);
 
   const markOneAsRead = useCallback(
     async (id: string): Promise<boolean> => {
