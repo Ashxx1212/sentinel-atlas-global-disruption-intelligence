@@ -25,33 +25,59 @@ import {
   type PersistedWatchlistLocation,
   type LocationSearchResult,
 } from '../lib/watchlists';
-import type { HazardType } from '../types';
-import { PageHeader, PrototypeNotice, SectionHeader } from '../components/ui';
+import {
+  createAlertRule,
+  deleteAlertRule,
+  fetchSavedAlertRules,
+  updateAlertRuleEnabled,
+  type AlertRuleSeverity,
+  type PersistedAlertRule,
+} from '../lib/alertRules';
+import { PageHeader, SectionHeader } from '../components/ui';
 
-const allHazardTypes: HazardType[] = [
+const alertRuleHazards = [
   'earthquake',
   'wildfire',
   'flood',
   'cyclone',
   'volcano',
   'severe-weather',
-];
+] as const;
 
-const alertChannels = [
-  { id: 'in-app', label: 'In-app notifications', enabled: true },
-  { id: 'email', label: 'Email digest', enabled: true },
-  { id: 'push', label: 'Push notifications', enabled: false },
-];
-
-const severityThresholds = [
-  { value: 'critical', label: 'Critical', enabled: true },
-  { value: 'high', label: 'High', enabled: true },
-  { value: 'elevated', label: 'Elevated', enabled: true },
-  { value: 'advisory', label: 'Advisory', enabled: false },
+const alertRuleSeverities: AlertRuleSeverity[] = [
+  'advisory',
+  'elevated',
+  'high',
+  'critical',
 ];
 
 const radiusOptions = [100, 250, 500, 800, 1800];
 type WatchlistStatus = 'idle' | 'loading' | 'saving' | 'saved' | 'updating' | 'removing' | 'error';
+type AlertRuleStatus = 'idle' | 'loading' | 'creating' | 'updating' | 'removing' | 'error';
+
+function humanize(value: string): string {
+  return value
+    .replace(/-/g, ' ')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function alertRuleHazardLabel(hazardType: string | null): string {
+  if (!hazardType) {
+    return 'All hazards';
+  }
+
+  return (
+    hazardTypeLabels[hazardType as keyof typeof hazardTypeLabels] ??
+    humanize(hazardType)
+  );
+}
+
+function alertRuleDistanceLabel(maximumDistanceKm: number | null): string {
+  return maximumDistanceKm === null
+    ? 'Uses saved-location radius'
+    : `${maximumDistanceKm.toLocaleString()} km maximum`;
+}
 
 function sortSavedLocations(locations: PersistedWatchlistLocation[]): PersistedWatchlistLocation[] {
   return [...locations].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
@@ -61,18 +87,17 @@ export function SettingsPage() {
   const navigate = useNavigate();
   const { isAuthenticated, user, profile, isConfigured } = useAuth();
 
-  const [channels, setChannels] = useState(alertChannels);
-  const [thresholds, setThresholds] = useState(severityThresholds);
   const [theme, setTheme] = useState('midnight');
   const [timezone, setTimezone] = useState('UTC');
-  const [hazardTypes, setHazardTypes] = useState<Record<HazardType, boolean>>({
-    earthquake: true,
-    wildfire: true,
-    flood: true,
-    cyclone: true,
-    volcano: true,
-    'severe-weather': true,
-  });
+  const [alertRules, setAlertRules] = useState<PersistedAlertRule[]>([]);
+  const [alertRuleStatus, setAlertRuleStatus] = useState<AlertRuleStatus>('idle');
+  const [alertRuleError, setAlertRuleError] = useState<string | null>(null);
+  const [draftRuleName, setDraftRuleName] = useState('');
+  const [draftRuleHazard, setDraftRuleHazard] = useState<string>('all');
+  const [draftRuleSeverity, setDraftRuleSeverity] = useState<AlertRuleSeverity>('high');
+  const [draftRuleDistanceCap, setDraftRuleDistanceCap] = useState<string>('watchlist-radius');
+  const [updatingRuleId, setUpdatingRuleId] = useState<string | null>(null);
+  const [removingRuleId, setRemovingRuleId] = useState<string | null>(null);
   const [savedToast, setSavedToast] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -111,6 +136,15 @@ export function SettingsPage() {
     return `${savedLocations.length} saved`;
   }, [savedLocations.length, watchlistStatus]);
 
+  const savedAlertRulesLabel = useMemo(() => {
+    if (alertRuleStatus === 'loading') return 'Loading rules...';
+    if (alertRuleStatus === 'creating') return 'Creating rule...';
+    if (alertRuleStatus === 'updating') return 'Updating rule...';
+    if (alertRuleStatus === 'removing') return 'Removing rule...';
+    if (alertRuleStatus === 'error') return 'Could not sync';
+    return `${alertRules.length} saved`;
+  }, [alertRuleStatus, alertRules.length]);
+
   const showSavedToast = () => {
     if (toastResetRef.current !== null) {
       window.clearTimeout(toastResetRef.current);
@@ -123,25 +157,6 @@ export function SettingsPage() {
       }
       toastResetRef.current = null;
     }, 2000);
-  };
-
-  const toggleChannel = (id: string) => {
-    setChannels((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, enabled: !c.enabled } : c))
-    );
-    showSavedToast();
-  };
-
-  const toggleThreshold = (value: string) => {
-    setThresholds((prev) =>
-      prev.map((t) => (t.value === value ? { ...t, enabled: !t.enabled } : t))
-    );
-    showSavedToast();
-  };
-
-  const toggleHazard = (ht: HazardType) => {
-    setHazardTypes((prev) => ({ ...prev, [ht]: !prev[ht] }));
-    showSavedToast();
   };
 
   const resetSavedStatusSoon = useCallback(() => {
@@ -201,6 +216,34 @@ export function SettingsPage() {
   useEffect(() => {
     void loadSavedLocations();
   }, [loadSavedLocations]);
+
+  const loadAlertRules = useCallback(async () => {
+    if (!isAuthenticated || !user || !supabase || !isConfigured) {
+      setAlertRules([]);
+      setAlertRuleStatus('idle');
+      setAlertRuleError(null);
+      return;
+    }
+
+    setAlertRuleStatus('loading');
+    setAlertRuleError(null);
+
+    try {
+      const rules = await fetchSavedAlertRules(supabase, user.id);
+      if (!mountedRef.current) return;
+      setAlertRules(rules);
+      setAlertRuleStatus('idle');
+    } catch {
+      if (!mountedRef.current) return;
+      setAlertRules([]);
+      setAlertRuleError('Could not sync your saved alert rules.');
+      setAlertRuleStatus('error');
+    }
+  }, [isAuthenticated, isConfigured, user]);
+
+  useEffect(() => {
+    void loadAlertRules();
+  }, [loadAlertRules]);
 
   const runLocationSearch = useCallback(async () => {
     const query = searchQuery.trim();
@@ -379,14 +422,137 @@ export function SettingsPage() {
     }
   };
 
+  const handleCreateAlertRule = async () => {
+    if (!supabase || !user || alertRuleStatus === 'creating') {
+      return;
+    }
+
+    const name = draftRuleName.trim();
+
+    if (!name) {
+      setAlertRuleError('Give this alert rule a clear name before saving it.');
+      return;
+    }
+
+    if (name.length > 120) {
+      setAlertRuleError('Alert rule names must be 120 characters or fewer.');
+      return;
+    }
+
+    if (savedLocations.length === 0) {
+      setAlertRuleError('Add at least one saved monitoring location before creating a rule.');
+      return;
+    }
+
+    const maximumDistanceKm =
+      draftRuleDistanceCap === 'watchlist-radius'
+        ? null
+        : Number(draftRuleDistanceCap);
+
+    if (
+      maximumDistanceKm !== null &&
+      (!Number.isFinite(maximumDistanceKm) || maximumDistanceKm <= 0)
+    ) {
+      setAlertRuleError('Choose a valid distance cap.');
+      return;
+    }
+
+    setAlertRuleStatus('creating');
+    setAlertRuleError(null);
+
+    try {
+      const created = await createAlertRule(supabase, user.id, {
+        name,
+        hazard_type: draftRuleHazard === 'all' ? null : draftRuleHazard,
+        minimum_severity: draftRuleSeverity,
+        maximum_distance_km: maximumDistanceKm,
+      });
+
+      if (!mountedRef.current) return;
+
+      setAlertRules((current) => [created, ...current]);
+      setDraftRuleName('');
+      setDraftRuleHazard('all');
+      setDraftRuleSeverity('high');
+      setDraftRuleDistanceCap('watchlist-radius');
+      setAlertRuleStatus('idle');
+      showSavedToast();
+    } catch {
+      if (!mountedRef.current) return;
+      setAlertRuleError('Could not create this alert rule. Please try again.');
+      setAlertRuleStatus('error');
+    }
+  };
+
+  const handleAlertRuleEnabledChange = async (rule: PersistedAlertRule) => {
+    if (!supabase || !user || updatingRuleId === rule.id) {
+      return;
+    }
+
+    setUpdatingRuleId(rule.id);
+    setAlertRuleStatus('updating');
+    setAlertRuleError(null);
+
+    try {
+      const updated = await updateAlertRuleEnabled(
+        supabase,
+        user.id,
+        rule.id,
+        !rule.enabled,
+      );
+
+      if (!mountedRef.current) return;
+
+      setAlertRules((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setAlertRuleStatus('idle');
+      showSavedToast();
+    } catch {
+      if (!mountedRef.current) return;
+      setAlertRuleError('Could not update this alert rule. Please try again.');
+      setAlertRuleStatus('error');
+    } finally {
+      if (mountedRef.current) {
+        setUpdatingRuleId(null);
+      }
+    }
+  };
+
+  const handleRemoveAlertRule = async (ruleId: string) => {
+    if (!supabase || !user || removingRuleId === ruleId) {
+      return;
+    }
+
+    setRemovingRuleId(ruleId);
+    setAlertRuleStatus('removing');
+    setAlertRuleError(null);
+
+    try {
+      await deleteAlertRule(supabase, user.id, ruleId);
+
+      if (!mountedRef.current) return;
+
+      setAlertRules((current) => current.filter((rule) => rule.id !== ruleId));
+      setAlertRuleStatus('idle');
+      showSavedToast();
+    } catch {
+      if (!mountedRef.current) return;
+      setAlertRuleError('Could not remove this alert rule. Please try again.');
+      setAlertRuleStatus('error');
+    } finally {
+      if (mountedRef.current) {
+        setRemovingRuleId(null);
+      }
+    }
+  };
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="Settings"
-        subtitle="Manage your profile, watchlist, alert preferences, and privacy. Uses prototype fixture data."
-      >
-        <PrototypeNotice />
-      </PageHeader>
+        subtitle="Manage account-scoped watchlists and alert rules. Theme and timezone controls remain prototype preferences."
+      />
 
       <div className="space-y-6">
         {/* Profile card */}
@@ -623,78 +789,317 @@ export function SettingsPage() {
           )}
         </div>
 
-        {/* Alert preferences */}
+        {/* Alert rules */}
         <div className="panel p-5">
-          <SectionHeader title="Alert Preferences" icon={Bell} />
+          <SectionHeader title="Alert Rules" icon={Bell} />
 
-          {/* Channels */}
-          <div className="mb-4">
-            <p className="mb-2 text-xs font-medium text-slate-400">Delivery Channels</p>
-            <div className="space-y-2">
-              {channels.map((channel) => (
-                <button
-                  key={channel.id}
-                  onClick={() => toggleChannel(channel.id)}
-                  className="flex w-full cursor-pointer items-center justify-between rounded-lg border border-ink-700/60 bg-ink-850/40 p-3 transition-colors hover:border-ink-600"
-                >
-                  <span className="text-sm text-slate-200">{channel.label}</span>
-                  <span
-                    className={`relative h-5 w-9 rounded-full transition-colors ${
-                      channel.enabled ? 'bg-cyan-500' : 'bg-ink-600'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                        channel.enabled ? 'translate-x-4' : 'translate-x-0.5'
-                      }`}
-                    />
+          {!isAuthenticated ? (
+            <div className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-4">
+              <p className="text-sm font-medium text-slate-200">
+                Sign in to manage private alert rules.
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                Rules are stored under your account and scoped to your primary watchlist.
+                They do not create browser-generated notifications.
+              </p>
+              <button
+                type="button"
+                onClick={() => navigate('/auth')}
+                className="btn-secondary mt-3"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Sign in to manage alert rules
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
+                <div className="flex items-start gap-2">
+                  <Bell className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-300" />
+                  <div>
+                    <p className="text-sm font-medium text-slate-200">
+                      Rules apply to your Primary watchlist
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      This account currently has {savedLocations.length} saved monitoring
+                      location{savedLocations.length === 1 ? '' : 's'}. Future server-side
+                      matching will compare active incidents with these saved rules. Creating a
+                      rule does not create a notification yet.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <form
+                className="rounded-lg border border-ink-700/60 bg-ink-850/30 p-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleCreateAlertRule();
+                }}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium text-slate-200">
+                      Create alert rule
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Each rule is private to this account and its primary watchlist.
+                    </p>
+                  </div>
+                  <span className="chip border-ink-600/60 bg-ink-800/60 text-slate-400">
+                    {savedLocations.length} watched location{savedLocations.length === 1 ? '' : 's'}
                   </span>
-                </button>
-              ))}
-            </div>
-          </div>
+                </div>
 
-          {/* Severity thresholds */}
-          <div>
-            <p className="mb-2 text-xs font-medium text-slate-400">Severity Thresholds</p>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {thresholds.map((t) => (
-                <button
-                  key={t.value}
-                  onClick={() => toggleThreshold(t.value)}
-                  className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border p-2.5 text-xs font-medium transition-all ${
-                    t.enabled
-                      ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
-                      : 'border-ink-700/60 bg-ink-850/40 text-slate-500'
-                  }`}
-                >
-                  {t.enabled && <Check className="h-3 w-3" />}
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="block sm:col-span-2">
+                    <span className="text-xs font-medium text-slate-400">Rule name</span>
+                    <input
+                      value={draftRuleName}
+                      onChange={(event) => setDraftRuleName(event.target.value)}
+                      maxLength={120}
+                      placeholder="Example: High-severity earthquake watch"
+                      className="mt-1 w-full rounded-lg border border-ink-700/60 bg-ink-850/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/40 focus:outline-none"
+                    />
+                  </label>
 
-          {/* Hazard types */}
-          <div className="mt-4">
-            <p className="mb-2 text-xs font-medium text-slate-400">Hazard Types</p>
-            <div className="flex flex-wrap gap-2">
-              {allHazardTypes.map((ht) => (
-                <button
-                  key={ht}
-                  onClick={() => toggleHazard(ht)}
-                  className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${
-                    hazardTypes[ht]
-                      ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
-                      : 'border-ink-700/60 bg-ink-850/40 text-slate-500'
-                  }`}
-                >
-                  {hazardTypes[ht] && <Check className="h-3 w-3" />}
-                  {hazardTypeLabels[ht]}
-                </button>
-              ))}
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-400">Hazard</span>
+                    <select
+                      value={draftRuleHazard}
+                      onChange={(event) => setDraftRuleHazard(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-ink-700/60 bg-ink-850/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                    >
+                      <option value="all">All hazards</option>
+                      {alertRuleHazards.map((hazard) => (
+                        <option key={hazard} value={hazard}>
+                          {hazardTypeLabels[hazard]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-400">
+                      Minimum severity
+                    </span>
+                    <select
+                      value={draftRuleSeverity}
+                      onChange={(event) =>
+                        setDraftRuleSeverity(event.target.value as AlertRuleSeverity)
+                      }
+                      className="mt-1 w-full rounded-lg border border-ink-700/60 bg-ink-850/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                    >
+                      {alertRuleSeverities.map((severity) => (
+                        <option key={severity} value={severity}>
+                          {humanize(severity)} or higher
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block sm:col-span-2">
+                    <span className="text-xs font-medium text-slate-400">
+                      Rule distance cap
+                    </span>
+                    <select
+                      value={draftRuleDistanceCap}
+                      onChange={(event) => setDraftRuleDistanceCap(event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-ink-700/60 bg-ink-850/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-500/40 focus:outline-none"
+                    >
+                      <option value="watchlist-radius">
+                        Use each saved location&apos;s radius
+                      </option>
+                      {radiusOptions.map((radius) => (
+                        <option key={radius} value={radius}>
+                          {radius.toLocaleString()} km maximum
+                        </option>
+                      ))}
+                    </select>
+                    <span className="mt-1 block text-[10px] leading-relaxed text-slate-600">
+                      A saved location&apos;s own radius remains the default boundary. A rule
+                      cap can make future matching stricter.
+                    </span>
+                  </label>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <button
+                    type="submit"
+                    className="btn-secondary"
+                    disabled={
+                      alertRuleStatus === 'creating' || savedLocations.length === 0
+                    }
+                  >
+                    {alertRuleStatus === 'creating' ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plus className="h-4 w-4" />
+                    )}
+                    {alertRuleStatus === 'creating'
+                      ? 'Creating rule...'
+                      : 'Create alert rule'}
+                  </button>
+                  {savedLocations.length === 0 ? (
+                    <span className="text-xs text-warning-300">
+                      Add a saved monitoring location before creating a rule.
+                    </span>
+                  ) : null}
+                </div>
+
+                {alertRuleError && alertRuleStatus !== 'error' ? (
+                  <p className="mt-3 text-xs leading-relaxed text-error-300">
+                    {alertRuleError}
+                  </p>
+                ) : null}
+              </form>
+
+              <div className="rounded-lg border border-ink-700/60 bg-ink-850/30 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      Saved alert rules
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-600">
+                      Primary watchlist only
+                    </p>
+                  </div>
+
+                  {alertRuleStatus === 'error' ? (
+                    <button
+                      type="button"
+                      onClick={() => void loadAlertRules()}
+                      className="text-[10px] font-medium text-error-300 transition-colors hover:text-error-200"
+                    >
+                      Could not sync — Retry
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-slate-500">
+                      {savedAlertRulesLabel}
+                    </span>
+                  )}
+                </div>
+
+                {alertRuleError && alertRuleStatus === 'error' ? (
+                  <p className="mt-2 text-[11px] leading-relaxed text-error-300">
+                    {alertRuleError}
+                  </p>
+                ) : null}
+
+                {alertRuleStatus === 'loading' && alertRules.length === 0 ? (
+                  <p className="mt-3 text-sm text-slate-500">Loading saved alert rules...</p>
+                ) : alertRules.length === 0 ? (
+                  <p className="mt-3 text-sm leading-relaxed text-slate-500">
+                    No saved alert rules yet. Create one above to store the matching criteria
+                    a future server-side evaluator will use.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {alertRules.map((rule) => {
+                      const updating = updatingRuleId === rule.id;
+                      const removing = removingRuleId === rule.id;
+
+                      return (
+                        <div
+                          key={rule.id}
+                          className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-3"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-medium text-slate-200">
+                                  {rule.name}
+                                </p>
+                                <span
+                                  className={`chip ${
+                                    rule.enabled
+                                      ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+                                      : 'border-ink-600/60 bg-ink-800/60 text-slate-400'
+                                  }`}
+                                >
+                                  {rule.enabled ? 'Enabled' : 'Paused'}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                                {alertRuleHazardLabel(rule.hazard_type)} ·{' '}
+                                {humanize(rule.minimum_severity)} or higher ·{' '}
+                                {alertRuleDistanceLabel(rule.maximum_distance_km)}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleAlertRuleEnabledChange(rule)}
+                                disabled={updating || removing}
+                                className="flex items-center gap-1.5 rounded border border-ink-700/60 bg-ink-850/50 px-2 py-1 text-[10px] text-slate-400 transition-colors hover:border-cyan-500/30 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+                                aria-label={
+                                  rule.enabled
+                                    ? `Pause ${rule.name}`
+                                    : `Enable ${rule.name}`
+                                }
+                              >
+                                {updating ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Check className="h-3 w-3" />
+                                )}
+                                {updating
+                                  ? 'Saving...'
+                                  : rule.enabled
+                                    ? 'Pause'
+                                    : 'Enable'}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => void handleRemoveAlertRule(rule.id)}
+                                disabled={updating || removing}
+                                className="flex items-center gap-1 rounded border border-ink-700/60 bg-ink-850/50 px-2 py-1 text-[10px] text-slate-400 transition-colors hover:border-error-500/30 hover:text-error-300 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {removing ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-ink-700/60 bg-ink-850/30 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Delivery status
+                </p>
+                <div className="mt-3 space-y-2 text-xs">
+                  <div className="flex items-start justify-between gap-3 rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2.5">
+                    <div>
+                      <p className="font-medium text-slate-200">In-app notification inbox</p>
+                      <p className="mt-1 leading-relaxed text-slate-500">
+                        Private inbox is ready. A server-side evaluator will create matching
+                        notifications later.
+                      </p>
+                    </div>
+                    <span className="whitespace-nowrap text-cyan-300">Ready</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2.5">
+                    <span className="text-slate-400">Email digest</span>
+                    <span className="text-slate-500">Not configured</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2.5">
+                    <span className="text-slate-400">Push notifications</span>
+                    <span className="text-slate-500">Not configured</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Theme preference */}
