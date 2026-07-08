@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   User,
   Heart,
@@ -12,9 +12,12 @@ import {
   Search,
   Loader2,
   Trash2,
+  ArrowRight,
+  Inbox,
 } from 'lucide-react';
 import { mockWatchlist, hazardTypeLabels } from '../data/mockIncidents';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotifications } from '../contexts/NotificationContext';
 import { supabase } from '../lib/supabase';
 import {
   fetchSavedWatchlistLocations,
@@ -99,6 +102,12 @@ function sortSavedLocations(locations: PersistedWatchlistLocation[]): PersistedW
 export function SettingsPage() {
   const navigate = useNavigate();
   const { isAuthenticated, user, profile, isConfigured } = useAuth();
+  const {
+    notifications,
+    unreadCount,
+    state: notificationState,
+    refreshNotifications,
+  } = useNotifications();
 
   const [theme, setTheme] = useState('midnight');
   const [timezone, setTimezone] = useState('UTC');
@@ -158,6 +167,23 @@ export function SettingsPage() {
     if (alertRuleStatus === 'error') return 'Could not sync';
     return `${alertRules.length} saved`;
   }, [alertRuleStatus, alertRules.length]);
+
+  const enabledAlertRuleCount = useMemo(
+    () => alertRules.filter((rule) => rule.enabled).length,
+    [alertRules],
+  );
+
+  const scopedAlertRuleCount = useMemo(
+    () => alertRules.filter((rule) => rule.watchlist_location_id !== null).length,
+    [alertRules],
+  );
+
+  const inboxStatusLabel = useMemo(() => {
+    if (!isAuthenticated) return 'Sign in required';
+    if (notificationState === 'loading') return 'Loading inbox...';
+    if (notificationState === 'error') return 'Inbox unavailable';
+    return `${unreadCount} unread · ${notifications.length} total`;
+  }, [isAuthenticated, notificationState, notifications.length, unreadCount]);
 
   const showSavedToast = () => {
     if (toastResetRef.current !== null) {
@@ -646,8 +672,12 @@ export function SettingsPage() {
     <div className="mx-auto max-w-4xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="Settings"
-        subtitle="Manage account-scoped watchlists and alert rules. Theme and timezone controls remain prototype preferences."
-      />
+        subtitle="Manage account-scoped watchlists, alert rules, and in-app notification delivery. Theme and timezone controls remain prototype preferences."
+      >
+        <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-300">
+          In-app alerts only
+        </span>
+      </PageHeader>
 
       <div className="space-y-6">
         {/* Profile card */}
@@ -670,6 +700,80 @@ export function SettingsPage() {
             </div>
           </div>
         </div>
+
+        {isAuthenticated ? (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Link
+              to="/my-world"
+              className="panel panel-hover group p-4 transition-all"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Watchlist
+                  </p>
+                  <p className="mt-2 font-mono text-2xl font-bold text-cyan-300">
+                    {savedLocations.length}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">Saved locations</p>
+                </div>
+                <Heart className="h-5 w-5 text-cyan-300" />
+              </div>
+              <span className="mt-3 inline-flex items-center gap-1 text-xs text-cyan-300">
+                Open My World
+                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </Link>
+
+            <Link
+              to="/my-world"
+              className="panel panel-hover group p-4 transition-all"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Alert Rules
+                  </p>
+                  <p className="mt-2 font-mono text-2xl font-bold text-cyan-300">
+                    {enabledAlertRuleCount}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Enabled · {scopedAlertRuleCount} scoped
+                  </p>
+                </div>
+                <Bell className="h-5 w-5 text-cyan-300" />
+              </div>
+              <span className="mt-3 inline-flex items-center gap-1 text-xs text-cyan-300">
+                Review rule context
+                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </Link>
+
+            <Link
+              to="/alerts"
+              className="panel panel-hover group p-4 transition-all"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    In-app Inbox
+                  </p>
+                  <p className="mt-2 font-mono text-2xl font-bold text-cyan-300">
+                    {unreadCount}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Unread · {notifications.length} total
+                  </p>
+                </div>
+                <Inbox className="h-5 w-5 text-cyan-300" />
+              </div>
+              <span className="mt-3 inline-flex items-center gap-1 text-xs text-cyan-300">
+                Open Alerts
+                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </Link>
+          </div>
+        ) : null}
 
         {/* Watchlist settings */}
         <div className="panel p-5">
@@ -1219,21 +1323,48 @@ export function SettingsPage() {
                 )}
               </div>
 
-              <div className="rounded-lg border border-ink-700/60 bg-ink-850/30 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Delivery status
-                </p>
-                <div className="mt-3 space-y-2 text-xs">
-                  <div className="flex items-start justify-between gap-3 rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2.5">
-                    <div>
-                      <p className="font-medium text-slate-200">In-app notification inbox</p>
-                      <p className="mt-1 leading-relaxed text-slate-500">
-                        Private inbox receives source-backed matches from the server-side evaluator.
-                        It is not an official emergency-warning channel.
-                      </p>
-                    </div>
-                    <span className="whitespace-nowrap text-cyan-300">Ready</span>
+              <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">
+                      Delivery status
+                    </p>
+                    <p className="mt-2 text-sm font-medium text-slate-200">
+                      In-app notification inbox only
+                    </p>
+                    <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
+                      Private inbox receives source-backed matches from the server-side evaluator.
+                      Email and push delivery are intentionally not configured in this build.
+                      This is not an official emergency-warning channel.
+                    </p>
                   </div>
+                  <span className="whitespace-nowrap rounded-full border border-cyan-500/25 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-medium text-cyan-300">
+                    {inboxStatusLabel}
+                  </span>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Link to="/alerts" className="btn-secondary text-xs">
+                    <Inbox className="h-3.5 w-3.5" />
+                    Open Notification Centre
+                  </Link>
+                  <Link to="/my-world" className="btn-secondary text-xs">
+                    <Heart className="h-3.5 w-3.5" />
+                    Open My World
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void refreshNotifications()}
+                    className="flex items-center gap-1.5 rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2 text-xs font-medium text-slate-400 transition-colors hover:border-cyan-500/30 hover:text-cyan-300"
+                    disabled={notificationState === 'loading'}
+                  >
+                    {notificationState === 'loading' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Bell className="h-3.5 w-3.5" />
+                    )}
+                    Refresh inbox
+                  </button>
                 </div>
               </div>
             </div>
@@ -1326,7 +1457,7 @@ export function SettingsPage() {
             <div className="rounded-lg border border-ink-700/60 bg-ink-850/40 p-3">
               <h4 className="text-sm font-medium text-slate-200">Prototype Limitations</h4>
               <p className="mt-1 text-xs text-slate-500">
-                Public intelligence screens can still use prototype fixtures. Signed-in watchlist locations are saved to your account.
+                Public intelligence screens can still include clearly labeled prototype fixtures. Signed-in watchlist locations, alert rules, and private notifications are saved to your account.
               </p>
             </div>
           </div>
