@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Filter, X, Layers, SearchX, RefreshCw, AlertTriangle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Filter, X, Layers, SearchX, RefreshCw, AlertTriangle, ArrowRight } from 'lucide-react';
 import {
   hazardTypeLabels,
 } from '../data/mockIncidents';
@@ -9,7 +10,7 @@ import { useHybridIncidents } from '../hooks/useHybridIncidents';
 import { MockMapWorkspace } from '../components/MockMapWorkspace';
 import { IncidentDrawer } from '../components/IncidentDrawer';
 import { SeverityBadge } from '../components/SeverityBadge';
-import { PageHeader, PrototypeNotice } from '../components/ui';
+import { PageHeader } from '../components/ui';
 
 const hazardFilters: { value: HazardType | 'all'; label: string }[] = [
   { value: 'all', label: 'All Hazards' },
@@ -36,11 +37,16 @@ const dataModeFilters: { value: HybridIncidentDataMode | 'all'; label: string }[
 ];
 
 export function GlobalMapPage() {
+  const navigate = useNavigate();
   const [hazardFilter, setHazardFilter] = useState<HazardType | 'all'>('all');
   const [severityFilter, setSeverityFilter] = useState<Severity | 'all'>('all');
   const [dataModeFilter, setDataModeFilter] = useState<HybridIncidentDataMode | 'all'>('all');
   const [selectedIncident, setSelectedIncident] = useState<HybridIncident | null>(null);
   const { incidents, state, errorMessage, refresh } = useHybridIncidents();
+
+  const openIncidentRoom = (incidentId: string) => {
+    navigate(`/incidents/${incidentId}`);
+  };
 
   const filteredIncidents = useMemo(() => {
     return incidents.filter((i) => {
@@ -69,7 +75,9 @@ export function GlobalMapPage() {
         title="Global Map"
         subtitle="Full-page hazard workspace with live source records and prototype fixtures, filterable by severity and hazard type."
       >
-        <PrototypeNotice />
+        <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-300">
+          Hybrid map · live + prototype
+        </span>
       </PageHeader>
 
       {/* Filter bar */}
@@ -211,6 +219,27 @@ export function GlobalMapPage() {
           <p className="mt-2 text-xs text-slate-500">
             Live source positions are plotted from stored source coordinates. Map styling remains illustrative.
           </p>
+
+          {selectedIncident ? (
+            <div className="mt-3 flex flex-col gap-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wider text-cyan-300">
+                  Selected incident
+                </p>
+                <p className="mt-1 truncate text-sm font-medium text-slate-200">
+                  {selectedIncident.title}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => openIncidentRoom(selectedIncident.id)}
+                className="btn-secondary justify-center text-xs"
+              >
+                Open Incident Room
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {/* Incident list sidebar */}
@@ -228,26 +257,40 @@ export function GlobalMapPage() {
             ) : (
               <div className="space-y-2">
                 {filteredIncidents.map((incident) => (
-                  <button
+                  <div
                     key={incident.id}
-                    onClick={() => setSelectedIncident(incident)}
-                    className={`block w-full rounded-lg border p-3 text-left transition-all ${
+                    className={`rounded-lg border p-3 transition-all ${
                       selectedIncident?.id === incident.id
                         ? 'border-cyan-500/40 bg-cyan-500/5'
                         : 'border-ink-700/60 bg-ink-850/40 hover:border-ink-600 hover:bg-ink-800/40'
                     }`}
                   >
-                    <div className="flex items-center gap-2">
-                      <SeverityBadge severity={incident.severity} size="xs" />
-                      <span className="text-[10px] text-slate-500">
-                        {hazardTypeLabels[incident.hazardType]}
-                      </span>
-                    </div>
-                    <p className="mt-1.5 text-xs font-medium text-slate-200 leading-snug">
-                      {incident.title}
-                    </p>
-                    <p className="mt-1 text-[10px] text-slate-500">{incident.location}</p>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIncident(incident)}
+                      className="block w-full text-left"
+                    >
+                      <div className="flex items-center gap-2">
+                        <SeverityBadge severity={incident.severity} size="xs" />
+                        <span className="text-[10px] text-slate-500">
+                          {hazardTypeLabels[incident.hazardType]}
+                        </span>
+                      </div>
+                      <p className="mt-1.5 text-xs font-medium text-slate-200 leading-snug">
+                        {incident.title}
+                      </p>
+                      <p className="mt-1 text-[10px] text-slate-500">{incident.location}</p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openIncidentRoom(incident.id)}
+                      className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+                    >
+                      Open Incident Room
+                      <ArrowRight className="h-3 w-3" />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
