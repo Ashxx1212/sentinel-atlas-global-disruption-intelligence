@@ -15,11 +15,10 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import {
-  mockIncidents,
-  mockWatchlist,
   mockSources,
   hazardTypeLabels,
 } from '../data/mockIncidents';
+import { useHybridIncidents } from '../hooks/useHybridIncidents';
 import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotifications } from '../contexts/NotificationContext';
@@ -38,6 +37,14 @@ function liveSourceLabel(code: string, fallbackName: string): string {
   if (code === 'eonet') return 'NASA EONET';
   if (code === 'gdacs') return 'GDACS';
   return fallbackName || code.toUpperCase();
+}
+
+function dataModeLabel(dataMode: string): string {
+  return dataMode === 'live_source' ? 'Live source record' : 'Prototype fixture';
+}
+
+function normalizeSearchText(value: string | null | undefined): string {
+  return value?.toLowerCase() ?? '';
 }
 
 export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
@@ -68,6 +75,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
     [notifications],
   );
   const { records, sources, state } = useLiveUsgsIncidents();
+  const { incidents: hybridIncidents } = useHybridIncidents();
   const { isAuthenticated, user, profile, signOut, isConfigured } = useAuth();
   const profileDisplayName =
     isAuthenticated
@@ -92,58 +100,99 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
     ? `Hybrid Mode · ${liveSources.length} live source${liveSources.length === 1 ? '' : 's'} · ${prototypeSourceCount} prototype fixture${prototypeSourceCount === 1 ? '' : 's'}`
     : 'Prototype Mode · 4 simulated sources';
 
-  // Build search results
+  // Build search results from the hybrid incident store, live source metadata, and routes.
   const searchResults = useMemo<SearchResult[]>(() => {
-    if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return [];
+
     const results: SearchResult[] = [];
 
-    mockIncidents.forEach((inc) => {
-      if (
-        inc.title.toLowerCase().includes(q) ||
-        inc.location.toLowerCase().includes(q) ||
-        hazardTypeLabels[inc.hazardType].toLowerCase().includes(q) ||
-        inc.source.toLowerCase().includes(q)
-      ) {
-        results.push({
-          id: inc.id,
-          label: inc.title,
-          sublabel: `${hazardTypeLabels[inc.hazardType]} · ${inc.location}`,
-          type: 'incident',
-          route: `/incidents/${inc.id}`,
-        });
-      }
+    const incidentMatches = hybridIncidents
+      .filter((incident) => {
+        const searchable = [
+          incident.title,
+          incident.location,
+          incident.placeName,
+          hazardTypeLabels[incident.hazardType],
+          incident.severity,
+          incident.source,
+          incident.sourceName,
+          incident.sourceCode,
+          incident.sourceLabel,
+          dataModeLabel(incident.dataMode),
+        ]
+          .map(normalizeSearchText)
+          .join(' ');
+
+        return searchable.includes(query);
+      })
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .slice(0, 5);
+
+    incidentMatches.forEach((incident) => {
+      results.push({
+        id: incident.id,
+        label: incident.title,
+        sublabel: `${hazardTypeLabels[incident.hazardType]} · ${incident.location} · ${incident.sourceName} · ${dataModeLabel(incident.dataMode)}`,
+        type: 'incident',
+        route: `/incidents/${incident.id}`,
+      });
     });
 
-    mockWatchlist.forEach((loc) => {
-      if (
-        loc.name.toLowerCase().includes(q) ||
-        loc.country.toLowerCase().includes(q)
-      ) {
-        results.push({
-          id: loc.id,
-          label: loc.name,
-          sublabel: `${loc.country} · Watchlist`,
-          type: 'location',
-          route: '/my-world',
-        });
-      }
-    });
+    const locationMatches = new Map<string, SearchResult>();
+    hybridIncidents
+      .filter((incident) =>
+        normalizeSearchText(incident.location).includes(query) ||
+        normalizeSearchText(incident.placeName).includes(query),
+      )
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .forEach((incident) => {
+        const label = incident.location || incident.placeName || 'Stored source location';
+        const key = label.toLowerCase();
+        if (!locationMatches.has(key)) {
+          locationMatches.set(key, {
+            id: `location-${key}`,
+            label,
+            sublabel: `${hazardTypeLabels[incident.hazardType]} nearby · Open latest matching incident`,
+            type: 'location',
+            route: `/incidents/${incident.id}`,
+          });
+        }
+      });
 
-    mockSources.forEach((src) => {
-      if (
-        src.name.toLowerCase().includes(q) ||
-        src.shortName.toLowerCase().includes(q)
-      ) {
+    results.push(...Array.from(locationMatches.values()).slice(0, 3));
+
+    liveSources.forEach((source) => {
+      const label = liveSourceLabel(source.code, source.display_name);
+      const searchable = `${label} ${source.code} ${source.display_name}`.toLowerCase();
+
+      if (searchable.includes(query)) {
+        const count = liveRecordCountByCode.get(source.code) ?? 0;
         results.push({
-          id: src.id,
-          label: src.shortName,
-          sublabel: `${src.name} · Source`,
+          id: `live-source-${source.code}`,
+          label,
+          sublabel: `${count} source-backed record${count === 1 ? '' : 's'} · Data Trust`,
           type: 'source',
           route: '/data-trust',
         });
       }
     });
+
+    mockSources
+      .filter((sourceItem) => !liveSourceCodes.has(sourceItem.id))
+      .forEach((sourceItem) => {
+        const searchable = `${sourceItem.name} ${sourceItem.shortName}`.toLowerCase();
+
+        if (searchable.includes(query)) {
+          results.push({
+            id: `fixture-source-${sourceItem.id}`,
+            label: sourceItem.shortName,
+            sublabel: `${sourceItem.name} · Prototype fixture source`,
+            type: 'source',
+            route: '/data-trust',
+          });
+        }
+      });
 
     const pages = [
       { label: 'Command Centre', route: '/command-centre' },
@@ -151,24 +200,40 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
       { label: 'My World', route: '/my-world' },
       { label: 'Incident Rooms', route: '/incidents' },
       { label: 'Alerts', route: '/alerts' },
+      { label: 'Notification Centre', route: '/alerts' },
       { label: 'Daily Briefing', route: '/briefing' },
       { label: 'Data Trust', route: '/data-trust' },
       { label: 'Settings', route: '/settings' },
     ];
-    pages.forEach((pg) => {
-      if (pg.label.toLowerCase().includes(q)) {
+
+    pages.forEach((page) => {
+      if (page.label.toLowerCase().includes(query)) {
         results.push({
-          id: pg.route,
-          label: pg.label,
+          id: page.route,
+          label: page.label,
           sublabel: 'Page',
           type: 'page',
-          route: pg.route,
+          route: page.route,
         });
       }
     });
 
-    return results.slice(0, 8);
-  }, [searchQuery]);
+    const uniqueResults = new Map<string, SearchResult>();
+    results.forEach((result) => {
+      const key = `${result.type}:${result.route}:${result.label}`;
+      if (!uniqueResults.has(key)) {
+        uniqueResults.set(key, result);
+      }
+    });
+
+    return Array.from(uniqueResults.values()).slice(0, 8);
+  }, [
+    hybridIncidents,
+    liveRecordCountByCode,
+    liveSourceCodes,
+    liveSources,
+    searchQuery,
+  ]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -261,7 +326,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
             <div className="panel max-h-80 overflow-y-auto p-2">
               {searchResults.length === 0 ? (
                 <div className="px-3 py-6 text-center">
-                  <p className="text-sm text-slate-500">No matching prototype records found.</p>
+                  <p className="text-sm text-slate-500">No matching source-backed or prototype records found.</p>
                 </div>
               ) : (
                 Object.entries(groupedResults).map(([type, items]) => {
