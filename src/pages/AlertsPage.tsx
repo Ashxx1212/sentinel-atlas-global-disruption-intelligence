@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertOctagon,
+  ArrowRight,
   Bell,
   CheckCheck,
   CheckCircle2,
@@ -253,7 +254,7 @@ function AuthenticatedAlertsPage() {
           }
           message={
             notifications.length === 0
-              ? 'No private notification records have been created for this account yet. Automated matching between incidents, watchlists, and alert rules is introduced separately on the server.'
+              ? 'No private notification records have been created for this account yet. Server-side matching creates notifications only when newly changed source-backed incidents match your saved rules.'
               : activeTab === 'unread'
                 ? 'No unread notifications remain.'
                 : 'No private notifications match this view.'
@@ -283,9 +284,9 @@ function AuthenticatedAlertsPage() {
             </div>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
               This page reads notifications belonging only to the signed-in account.
-              You can mark notifications read, but browser code never creates them.
-              Automated incident matching and notification creation will be added as a
-              separate server-side evaluator.
+              You can mark notifications read and open the related Incident Room, but
+              browser code never creates notifications. Source-backed incident matching
+              runs through the server-side evaluator.
             </p>
           </div>
         </div>
@@ -412,6 +413,18 @@ function NotificationCard({
               {timeAgo(notification.createdAt)}
             </span>
           </div>
+
+          <Link
+            to={`/incidents/${notification.incidentId}`}
+            onClick={() => {
+              void onMarkRead(notification.id);
+            }}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 transition-colors hover:border-cyan-400/40 hover:bg-cyan-500/15 hover:text-cyan-200"
+            aria-label={`View Incident Room for ${notification.title}`}
+          >
+            View Incident Room
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
         </div>
 
         {!isRead ? (
