@@ -26,7 +26,7 @@ import { MetricCard } from '../components/MetricCard';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { LiveSourceHealthPanel } from '../components/LiveSourceHealthPanel';
 import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
-import { MockMapWorkspace } from '../components/MockMapWorkspace';
+import { IncidentMapWorkspace } from '../components/IncidentMapWorkspace';
 import { IncidentDrawer } from '../components/IncidentDrawer';
 import { PageHeader, SectionHeader } from '../components/ui';
 import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
@@ -341,7 +341,7 @@ const sourceHealthSublabel = useMemo(() => {
         {/* Map */}
         <div className="lg:col-span-2">
           <SectionHeader title="Global Hazard Map" icon={MapPin} />
-          <MockMapWorkspace
+          <IncidentMapWorkspace
             incidents={commandMapIncidents}
             onMarkerClick={setDrawerIncident}
             className="h-[400px] lg:h-[480px]"

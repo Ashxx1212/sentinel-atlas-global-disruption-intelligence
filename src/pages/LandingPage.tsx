@@ -10,7 +10,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { mockIncidents } from '../data/mockIncidents';
-import { MockMapWorkspace } from '../components/MockMapWorkspace';
+import { IncidentMapWorkspace } from '../components/IncidentMapWorkspace';
 import { buildHybridIncidentFromFixture } from '../lib/hybridIncidents';
 
 const trustSources = [
@@ -75,7 +75,7 @@ export function LandingPage() {
             <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/5 px-3 py-1">
               <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse-dot" />
               <span className="text-xs font-medium text-cyan-300">
-                Intelligence Platform · Prototype
+                Source-backed intelligence · Prototype interface
               </span>
             </div>
 
@@ -86,10 +86,9 @@ export function LandingPage() {
             </h1>
 
             <p className="mt-6 max-w-lg text-base leading-relaxed text-slate-400 sm:text-lg">
-              Sentinel Atlas transforms verified public hazard signals into
-              location-aware intelligence — so you can monitor global incidents,
-              open detailed Incident Rooms, and receive personalised alerts
-              before disruption arrives at your doorstep.
+              Sentinel Atlas combines public hazard-source records, prototype scenario context,
+              watchlist rules, and private in-app alerts into a location-aware
+              disruption intelligence workspace.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -114,7 +113,7 @@ export function LandingPage() {
           {/* Right: animated map visual */}
           <div className="relative animate-fade-in" style={{ animationDelay: '200ms' }}>
             <div className="relative aspect-[4/3] overflow-hidden rounded-2xl border border-ink-700/60 bg-ink-900 shadow-panel">
-              <MockMapWorkspace
+              <IncidentMapWorkspace
                 incidents={mapIncidents}
                 interactive={false}
                 showLabels={false}
@@ -125,11 +124,11 @@ export function LandingPage() {
                 <div className="flex items-center gap-2">
                   <Activity className="h-3.5 w-3.5 text-cyan-400" />
                   <span className="text-xs font-medium text-slate-300">
-                    Live Global Overview
+                    Prototype map preview
                   </span>
                 </div>
                 <p className="mt-1 font-mono text-[10px] text-slate-600">
-                  {mockIncidents.length} active incidents tracked
+                  {mockIncidents.length} prototype fixtures displayed
                 </p>
               </div>
               <div className="pointer-events-none absolute bottom-4 right-4 flex gap-2">
@@ -155,7 +154,7 @@ export function LandingPage() {
       <section className="relative z-10 border-t border-ink-700/60 bg-ink-900/40">
         <div className="mx-auto max-w-7xl px-6 py-8">
           <p className="text-center text-xs font-medium uppercase tracking-wider text-slate-600">
-            Built on verified public hazard data sources
+            Built around public hazard sources and clearly labeled prototype context
           </p>
           <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
             {trustSources.map((src) => (
@@ -177,7 +176,7 @@ export function LandingPage() {
             ))}
           </div>
           <p className="mt-5 text-center text-[11px] text-slate-600">
-            Source labels are shown for clarity; authenticated app views separate source-backed records from prototype fixtures.
+            Source labels are shown for clarity; authenticated app views separate source-backed records, private alerts, and prototype fixtures.
           </p>
         </div>
       </section>
@@ -199,7 +198,7 @@ export function LandingPage() {
             {
               icon: Radio,
               title: 'Personalised Alerts',
-              desc: 'Watch your locations and receive alerts when disruption enters your radius or matches your rules.',
+              desc: 'Watch saved locations and receive private in-app alerts when source-backed incidents match your rules.',
             },
           ].map((f) => {
             const Icon = f.icon;

@@ -7,7 +7,7 @@ import {
 import type { HazardType, Severity } from '../types';
 import type { HybridIncident, HybridIncidentDataMode } from '../types/hybridIntelligence';
 import { useHybridIncidents } from '../hooks/useHybridIncidents';
-import { MockMapWorkspace } from '../components/MockMapWorkspace';
+import { IncidentMapWorkspace } from '../components/IncidentMapWorkspace';
 import { IncidentDrawer } from '../components/IncidentDrawer';
 import { SeverityBadge } from '../components/SeverityBadge';
 import { PageHeader } from '../components/ui';
@@ -210,7 +210,7 @@ export function GlobalMapPage() {
       {/* Map workspace */}
       <div className="grid gap-4 lg:grid-cols-4">
         <div className="lg:col-span-3">
-          <MockMapWorkspace
+          <IncidentMapWorkspace
             incidents={filteredIncidents}
             onMarkerClick={setSelectedIncident}
             selectedId={selectedIncident?.id}
