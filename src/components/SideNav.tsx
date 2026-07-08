@@ -10,6 +10,8 @@ import {
   Settings,
   X,
 } from 'lucide-react';
+import { mockSources } from '../data/mockIncidents';
+import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
 
 const navItems = [
   { to: '/command-centre', label: 'Command Centre', icon: LayoutDashboard },
@@ -22,7 +24,33 @@ const navItems = [
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
+function sourceLabel(code: string, fallbackName: string): string {
+  if (code === 'usgs') return 'USGS';
+  if (code === 'gdacs') return 'GDACS';
+  if (code === 'eonet') return 'EONET';
+  return fallbackName || code.toUpperCase();
+}
+
 export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
+  const { records, sources, state } = useLiveUsgsIncidents();
+
+  const liveSources = sources.filter(
+    (source) =>
+      source.source_mode === 'live_source' ||
+      source.code === 'usgs' ||
+      source.code === 'gdacs' ||
+      source.code === 'eonet',
+  );
+  const liveSourceCodes = new Set(liveSources.map((source) => source.code));
+  const prototypeSourceCount = mockSources.filter(
+    (sourceItem) => !liveSourceCodes.has(sourceItem.id),
+  ).length;
+  const liveSourceNames = liveSources
+    .map((source) => sourceLabel(source.code, source.display_name))
+    .join(' · ');
+  const liveSourcesAvailable =
+    liveSources.length > 0 && state !== 'unconfigured' && state !== 'error';
+
   return (
     <div className="flex h-full flex-col">
       {/* Logo */}
@@ -87,14 +115,39 @@ export function SideNav({ onNavigate }: { onNavigate?: () => void }) {
 
       {/* Footer */}
       <div className="border-t border-ink-700/60 p-4">
-        <div className="rounded-lg border border-ink-700/60 bg-ink-850/60 p-3">
+        <div
+          className={`rounded-lg border p-3 ${
+            liveSourcesAvailable
+              ? 'border-cyan-500/20 bg-cyan-500/5'
+              : 'border-warning-500/20 bg-warning-500/5'
+          }`}
+        >
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-warning-500 animate-pulse-dot" />
-            <span className="text-xs font-medium text-slate-400">Prototype Mode</span>
+            <span
+              className={`h-2 w-2 rounded-full animate-pulse-dot ${
+                liveSourcesAvailable ? 'bg-cyan-400' : 'bg-warning-500'
+              }`}
+            />
+            <span
+              className={`text-xs font-medium ${
+                liveSourcesAvailable ? 'text-cyan-300' : 'text-warning-300'
+              }`}
+            >
+              {liveSourcesAvailable ? 'Hybrid Mode' : 'Prototype Mode'}
+            </span>
           </div>
-          <p className="mt-1.5 text-[10px] leading-relaxed text-slate-600">
-            Mock Intelligence Data — not live or verified.
-          </p>
+          {liveSourcesAvailable ? (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-slate-500">
+              {liveSources.length} live source{liveSources.length === 1 ? '' : 's'} ·{' '}
+              {prototypeSourceCount} prototype fixture{prototypeSourceCount === 1 ? '' : 's'}.
+              {records.length > 0 ? ` ${records.length} source-backed records loaded.` : ''}
+              {liveSourceNames ? ` ${liveSourceNames}.` : ''}
+            </p>
+          ) : (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-slate-600">
+              Live source status is unavailable in this session. Prototype fixtures remain visible.
+            </p>
+          )}
         </div>
       </div>
     </div>
