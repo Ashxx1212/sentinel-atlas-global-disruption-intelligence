@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import {
   Activity,
   AlertOctagon,
-  Heart,
+  Bell,
   Server,
   Radio,
   ArrowRight,
@@ -16,13 +16,11 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import {
-  mockIncidents,
   mockSources,
   mockPriorityRegions,
-  mockIntelligenceStream,
   hazardTypeLabels,
 } from '../data/mockIncidents';
-import type { IntelligenceStreamEntry, PriorityRegion } from '../types';
+import type { PriorityRegion } from '../types';
 import type { HybridIncident } from '../types/hybridIntelligence';
 import { MetricCard } from '../components/MetricCard';
 import { SeverityBadge } from '../components/SeverityBadge';
@@ -30,9 +28,10 @@ import { LiveSourceHealthPanel } from '../components/LiveSourceHealthPanel';
 import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
 import { MockMapWorkspace } from '../components/MockMapWorkspace';
 import { IncidentDrawer } from '../components/IncidentDrawer';
-import { PageHeader, PrototypeNotice, SectionHeader } from '../components/ui';
+import { PageHeader, SectionHeader } from '../components/ui';
 import { useLiveUsgsIncidents } from '../hooks/useLiveUsgsIncidents';
-import { buildHybridIncidentFromFixture, buildHybridIncidentFromLiveRecord } from '../lib/hybridIncidents';
+import { useHybridIncidents } from '../hooks/useHybridIncidents';
+import { useNotifications } from '../contexts/NotificationContext';
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -87,16 +86,16 @@ export function CommandCentrePage() {
   const navigate = useNavigate();
   const [drawerIncident, setDrawerIncident] = useState<HybridIncident | null>(null);
   const { state, records, sources, recordCount, errorMessage, refresh } = useLiveUsgsIncidents();
+  const {
+    incidents: commandMapIncidents,
+    state: hybridState,
+    refresh: refreshHybridIncidents,
+  } = useHybridIncidents();
+  const { notifications, unreadCount } = useNotifications();
 
-  const fixtureMapIncidents = useMemo<HybridIncident[]>(() => mockIncidents.map(buildHybridIncidentFromFixture), []);
-  const liveMapIncidents = useMemo<HybridIncident[]>(
-    () => records.map((record) => buildHybridIncidentFromLiveRecord(record)),
-    [records],
-  );
-  const commandMapIncidents = useMemo<HybridIncident[]>(
-    () => [...fixtureMapIncidents, ...liveMapIncidents],
-    [fixtureMapIncidents, liveMapIncidents],
-  );
+  const refreshDashboard = () => {
+    void Promise.all([refresh(true), refreshHybridIncidents(true)]);
+  };
   const latestLiveSourceSuccess = useMemo(() => {
     const timestamps = sources
       .map((source) => source.last_success_at)
@@ -141,20 +140,42 @@ const sourceHealthSublabel = useMemo(() => {
   return `${degradedLabel} · ${fixtureLabel}`;
 }, [degradedLiveSourceCount, prototypeSourceCount]);
 
-  const activeCount = useMemo(() => commandMapIncidents.filter((i) => i.status === 'active').length, [commandMapIncidents]);
-  const criticalCount = useMemo(() => commandMapIncidents.filter((i) => i.severity === 'critical').length, [commandMapIncidents]);
-  const watchedAffected = 3;
-  const sortedStream = useMemo(() => [...mockIntelligenceStream].sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  ), []);
+  const activeCount = useMemo(
+    () => commandMapIncidents.filter((incident) => incident.status === 'active').length,
+    [commandMapIncidents],
+  );
+  const liveIncidentCount = useMemo(
+    () => commandMapIncidents.filter((incident) => incident.dataMode === 'live_source').length,
+    [commandMapIncidents],
+  );
+  const fixtureIncidentCount = useMemo(
+    () => commandMapIncidents.filter((incident) => incident.dataMode === 'prototype_fixture').length,
+    [commandMapIncidents],
+  );
+  const priorityIncidents = useMemo(
+    () =>
+      commandMapIncidents
+        .filter((incident) =>
+          incident.severity === 'critical' ||
+          incident.severity === 'high' ||
+          incident.severity === 'elevated',
+        )
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+    [commandMapIncidents],
+  );
+  const priorityIncidentCount = priorityIncidents.length;
+  const recentPriorityIncidents = priorityIncidents.slice(0, 6);
+  const dashboardLoading = state === 'loading' || hybridState === 'loading';
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="Global Disruption Overview"
-        subtitle="Synthesis of active hazards, source health, live source records, and prototype context."
+        subtitle="Hybrid operations dashboard for source-backed incidents, private alerts, source health, and prototype context."
       >
-        <PrototypeNotice />
+        <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-300">
+          Hybrid command layer
+        </span>
       </PageHeader>
 
       {/* Metrics row */}
@@ -169,33 +190,33 @@ const sourceHealthSublabel = useMemo(() => {
             value={activeCount}
             icon={Activity}
             accent="cyan"
-            sublabel="Currently being tracked"
+            sublabel={`${liveIncidentCount} live source · ${fixtureIncidentCount} fixture`}
           />
         </button>
         <button
-          onClick={() => navigate('/incidents?severity=critical')}
+          onClick={() => navigate('/incidents')}
           className="text-left"
-          aria-label="View critical incidents"
+          aria-label="View priority incidents"
         >
           <MetricCard
-            label="Critical Incidents"
-            value={criticalCount}
+            label="Priority Incidents"
+            value={priorityIncidentCount}
             icon={AlertOctagon}
-            accent="critical"
-            sublabel="Requiring immediate attention"
+            accent="high"
+            sublabel="Elevated, high, and critical records"
           />
         </button>
         <button
-          onClick={() => navigate('/my-world')}
+          onClick={() => navigate('/alerts')}
           className="text-left"
-          aria-label="View watched locations"
+          aria-label="View private alerts"
         >
           <MetricCard
-            label="Watched Locations Affected"
-            value={watchedAffected}
-            icon={Heart}
+            label="Private Alerts"
+            value={unreadCount}
+            icon={Bell}
             accent="elevated"
-            sublabel="Of 3 watched locations"
+            sublabel={`${notifications.length} total notification${notifications.length === 1 ? '' : 's'}`}
           />
         </button>
         <button
@@ -203,13 +224,13 @@ const sourceHealthSublabel = useMemo(() => {
           className="text-left"
           aria-label="View source health"
         >
-              <MetricCard
-             label="Source Health"
-             value={`${operationalLiveSourceCount} operational`}
-             icon={Server}
-             accent="high"
-             sublabel={sourceHealthSublabel}
-           />
+          <MetricCard
+            label="Source Health"
+            value={`${operationalLiveSourceCount} operational`}
+            icon={Server}
+            accent="cyan"
+            sublabel={sourceHealthSublabel}
+          />
         </button>
       </div>
 
@@ -224,12 +245,12 @@ const sourceHealthSublabel = useMemo(() => {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => { void refresh(true); }}
+              onClick={refreshDashboard}
               className="btn-secondary"
-              disabled={state === 'loading'}
+              disabled={dashboardLoading}
             >
               <RefreshCw className={`h-4 w-4 ${state === 'loading' ? 'animate-spin' : ''}`} />
-              {state === 'loading' ? 'Refreshing database data...' : 'Refresh database data'}
+              {dashboardLoading ? 'Refreshing dashboard data...' : 'Refresh dashboard data'}
             </button>
             <Link to="/global-map" className="btn-primary">
               <MapPin className="h-4 w-4" />
@@ -333,48 +354,70 @@ const sourceHealthSublabel = useMemo(() => {
               </div>
             ))}
             <span className="text-xs text-slate-600">·</span>
-            <span className="text-xs text-slate-600">Mock map · Live source records + prototype fixtures</span>
+            <span className="text-xs text-slate-600">Illustrative map · Live source records + prototype fixtures</span>
           </div>
         </div>
 
-        {/* Intelligence Stream */}
+        {/* Recent priority incidents */}
         <div>
-          <SectionHeader title="Intelligence Stream" icon={Radio} />
+          <SectionHeader title="Recent Priority Incidents" icon={Radio} />
           <div className="panel h-[400px] overflow-y-auto p-3 lg:h-[480px]">
-            <div className="space-y-1 stagger-children">
-              {sortedStream.map((entry: IntelligenceStreamEntry, idx) => (
-                <Link
-                  key={entry.id}
-                  to={`/incidents/${entry.incidentId}`}
-                  className="block rounded-lg border border-transparent p-3 transition-all hover:border-cyan-500/20 hover:bg-ink-800/40"
-                >
-                  <div className="flex items-start gap-2.5">
-                    <div className="relative mt-1 flex-shrink-0">
-                      <span className={`h-2 w-2 rounded-full ${severityDot[entry.severity]}`} />
-                      {idx === 0 && (
-                        <span className={`absolute inset-0 h-2 w-2 rounded-full ${severityDot[entry.severity]} animate-ping-slow`} />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium text-slate-200 leading-snug">
-                        {entry.title}
-                      </p>
-                      <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-500">
-                        <span>{hazardTypeLabels[entry.hazardType]}</span>
-                        <span>·</span>
-                        <span className="flex items-center gap-0.5">
-                          <Clock className="h-2.5 w-2.5" />
-                          {timeAgo(entry.timestamp)}
-                        </span>
+            {recentPriorityIncidents.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-center">
+                <div>
+                  <CheckCircle2 className="mx-auto h-6 w-6 text-success-400" />
+                  <p className="mt-2 text-sm text-slate-400">
+                    No elevated, high, or critical records are currently visible.
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Lower-severity advisory records may still appear on the map.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1 stagger-children">
+                {recentPriorityIncidents.map((incident, idx) => (
+                  <Link
+                    key={incident.id}
+                    to={`/incidents/${incident.id}`}
+                    className="block rounded-lg border border-transparent p-3 transition-all hover:border-cyan-500/20 hover:bg-ink-800/40"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <div className="relative mt-1 flex-shrink-0">
+                        <span className={`h-2 w-2 rounded-full ${severityDot[incident.severity]}`} />
+                        {idx === 0 ? (
+                          <span className={`absolute inset-0 h-2 w-2 rounded-full ${severityDot[incident.severity]} animate-ping-slow`} />
+                        ) : null}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <SeverityBadge severity={incident.severity} size="xs" />
+                          <span className="text-[10px] text-slate-500">
+                            {incident.dataMode === 'live_source' ? 'Live source' : 'Prototype fixture'}
+                          </span>
+                        </div>
+                        <p className="mt-1.5 text-xs font-medium text-slate-200 leading-snug">
+                          {incident.title}
+                        </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
+                          <span>{hazardTypeLabels[incident.hazardType]}</span>
+                          <span>·</span>
+                          <span>{incident.location}</span>
+                          <span>·</span>
+                          <span className="flex items-center gap-0.5">
+                            <Clock className="h-2.5 w-2.5" />
+                            {timeAgo(incident.updatedAt)}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </Link>
-              ))}
-            </div>
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
           <p className="mt-2 text-[11px] text-slate-600">
-            Illustrative stream entries with live source records shown on the map.
+            Source-backed and prototype records ordered by latest stored update.
           </p>
         </div>
       </div>
@@ -382,7 +425,7 @@ const sourceHealthSublabel = useMemo(() => {
       {/* Priority Regions + Data Integrity */}
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <SectionHeader title="Priority Regions" icon={Activity} />
+          <SectionHeader title="Prototype Priority Regions" icon={Activity} />
           <div className="grid gap-3 sm:grid-cols-2 stagger-children">
             {mockPriorityRegions.map((region: PriorityRegion) => (
               <Link
@@ -447,8 +490,8 @@ const sourceHealthSublabel = useMemo(() => {
               How this prototype works
             </h3>
             <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-              This interface combines live source-backed records with local prototype fixtures.
-              Learn about integrity labels and simulated source data on the Data Trust page.
+              This interface combines live source-backed records with clearly labeled prototype fixtures.
+              Learn about integrity labels, ingestion health, and simulated context on the Data Trust page.
             </p>
           </div>
           <ArrowRight className="h-4 w-4 flex-shrink-0 text-slate-600 group-hover:text-cyan-300 group-hover:translate-x-0.5 transition-all" />
