@@ -1234,14 +1234,6 @@ export function SettingsPage() {
                     </div>
                     <span className="whitespace-nowrap text-cyan-300">Ready</span>
                   </div>
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2.5">
-                    <span className="text-slate-400">Email digest</span>
-                    <span className="text-slate-500">Not configured</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-ink-700/60 bg-ink-850/40 px-3 py-2.5">
-                    <span className="text-slate-400">Push notifications</span>
-                    <span className="text-slate-500">Not configured</span>
-                  </div>
                 </div>
               </div>
             </div>
