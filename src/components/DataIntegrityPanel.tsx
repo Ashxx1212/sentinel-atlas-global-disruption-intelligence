@@ -14,7 +14,8 @@ const config: Record<
 > = {
   verified: {
     label: 'Verified',
-    description: 'Would represent a confirmed source record in the live platform.',
+    description:
+      'A stored source observation or stable record with traceable origin metadata. Sentinel Atlas still does not independently certify the event.',
     icon: CheckCircle2,
     text: 'text-success-400',
     bg: 'bg-success-500/10',
@@ -22,7 +23,8 @@ const config: Record<
   },
   forecast: {
     label: 'Forecast',
-    description: 'Illustrative forecast-context state.',
+    description:
+      'Forward-looking or contextual estimate. Useful for briefing context, not a confirmed observation.',
     icon: CloudSun,
     text: 'text-electric-300',
     bg: 'bg-electric-500/10',
@@ -30,7 +32,8 @@ const config: Record<
   },
   pending: {
     label: 'Pending',
-    description: 'Illustrative reconciliation state.',
+    description:
+      'Stored metadata is available but still limited, incomplete, or awaiting reconciliation.',
     icon: Clock3,
     text: 'text-warning-400',
     bg: 'bg-warning-500/10',
@@ -38,7 +41,8 @@ const config: Record<
   },
   unavailable: {
     label: 'Unavailable',
-    description: 'No demonstration data for this field.',
+    description:
+      'No source-backed value is available for this field in the current record.',
     icon: Ban,
     text: 'text-slate-400',
     bg: 'bg-slate-500/10',
@@ -90,7 +94,7 @@ export function DataIntegrityPanel({
               <Icon className={`h-4 w-4 ${c.text}`} />
               <span className={`text-sm font-semibold ${c.text}`}>{c.label}</span>
             </div>
-            <p className="mt-1.5 text-xs text-slate-400 leading-relaxed">
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
               {c.description}
             </p>
           </div>
