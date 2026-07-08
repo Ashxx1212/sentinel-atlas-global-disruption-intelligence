@@ -1,6 +1,6 @@
 # Sentinel Atlas — Global Disruption Intelligence
 
-A full-stack global disruption intelligence platform that combines live hazard-source ingestion, source-health monitoring, map-based incident exploration, operational workflows, and clearly labelled prototype context.
+A full-stack global disruption intelligence platform for monitoring public hazard-source records, exploring incidents on a real geospatial map, managing private watchlists, and reviewing source trust through a transparent operational dashboard.
 
 [Live Demo](https://sentinel-atlas-global-disruption-in.vercel.app/) · [GitHub Repository](https://github.com/Ashxx1212/sentinel-atlas-global-disruption-intelligence)
 
@@ -8,17 +8,22 @@ A full-stack global disruption intelligence platform that combines live hazard-s
 
 ## Overview
 
-Sentinel Atlas is designed as a global disruption intelligence workspace rather than a static analytics dashboard.
+Sentinel Atlas is designed as a global disruption intelligence workspace, not a static analytics dashboard.
 
-It helps users move from a high-level view of active global hazards into source-backed incident records, map context, watchlist relevance, operational alerts, daily briefing workflows, and data-integrity information.
+The platform helps users move from a high-level operational overview into live source-backed incident records, geospatial context, Incident Rooms, private watchlist relevance, in-app alerts, daily briefing workflows, source health, and data-integrity information.
 
-The platform intentionally distinguishes between:
+Sentinel Atlas intentionally separates:
 
-- **Live source-backed records** from connected public providers
-- **Stored ingestion snapshots** retained when a provider is temporarily unavailable
-- **Prototype fixtures** used for demonstration workflows such as alerts, briefings, and scenario context
+- **Source-backed records** from connected public hazard providers
+- **Stored ingestion snapshots** retained when providers are temporarily unavailable
+- **Private account-scoped watchlists and alert rules**
+- **Server-created in-app notifications**
+- **Prototype fixtures** used only where clearly labelled for demonstration context
 
-This avoids presenting local prototype data as verified live intelligence.
+This distinction avoids presenting prototype data as verified live intelligence, because apparently dashboards should not cosplay as disaster agencies.
+
+---
+
 ## Product Preview
 
 <p align="center">
@@ -26,13 +31,13 @@ This avoids presenting local prototype data as verified live intelligence.
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/02-incident-rooms.jpg" alt="Incident Rooms with hazard filters and incident records" width="49%" />
-  <img src="docs/screenshots/03-global-hazard-map.jpg" alt="Global hazard map and intelligence stream" width="49%" />
+  <img src="docs/screenshots/02-incident-rooms.jpg" alt="Incident Rooms with hazard filters and hybrid incident records" width="49%" />
+  <img src="docs/screenshots/03-global-hazard-map.jpg" alt="Global map with source-backed incident markers" width="49%" />
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/04-notification-centre.jpg" alt="Notification Centre with alert rules and incident links" width="49%" />
-  <img src="docs/screenshots/05-data-trust.jpg" alt="Data Trust page with integrity labels" width="49%" />
+  <img src="docs/screenshots/04-notification-centre.jpg" alt="Private in-app Notification Centre" width="49%" />
+  <img src="docs/screenshots/05-data-trust.jpg" alt="Data Trust page with integrity labels and source operations" width="49%" />
 </p>
 
 ---
@@ -49,12 +54,26 @@ Sentinel Atlas ingests and normalises records from:
 
 The ingestion layer stores source records, canonical incidents, source evidence, ingestion-run history, and incident updates in Supabase.
 
+### Real geospatial incident map
+
+The Global Map uses a real map basemap with markers plotted from stored latitude and longitude.
+
+Map capabilities include:
+
+- Real geospatial basemap
+- Latitude/longitude incident markers
+- Zoom and pan
+- Marker popups
+- Incident preview drawer
+- Links from selected incidents to Incident Rooms
+- Clear distinction between source-backed records and prototype fixtures
+
 ### Secure scheduled refreshes
 
 Live-source refreshes are automated through a protected workflow:
 
 ```text
-pg_cron → pg_net → Supabase Edge Function → Public provider API
+pg_cron → pg_net → protected Supabase Edge Function → public provider API
 ```
 
 Protected ingestion requests use a Vault-backed token and are not exposed to browser users.
@@ -78,7 +97,7 @@ NASA EONET can return large result sets that reach provider limits. Sentinel Atl
 
 ### Source health and degraded-provider handling
 
-The Command Centre includes a Live Source Health panel that communicates:
+The Command Centre and Data Trust views communicate:
 
 - Operational or degraded provider status
 - Last successful source refresh
@@ -86,21 +105,41 @@ The Command Centre includes a Live Source Health panel that communicates:
 - Safe user-facing provider-status messaging
 - Continued availability of previously stored source-backed records
 
-Raw provider errors, internal request data, tokens, headers, and secrets are not exposed in the browser UI.
+Raw provider errors, protected request details, tokens, headers, and secrets are not exposed in the browser UI.
 
-### Intelligence workflow experience
+### Private in-app alert workflow
 
-The application includes:
+Signed-in users can save watchlist locations and create alert rules. The server-side evaluator compares newly changed active source-backed incidents against those saved rules.
 
-- Global Command Centre
-- Global Hazard Map
-- Incident Rooms
-- Personalised My World watchlists
-- Notification Centre
-- Daily Risk Briefing workflow
-- Data Trust and provenance view
-- Settings and user preferences
-- Authentication and workspace access flow
+The browser can:
+
+- Read the signed-in user’s private notifications
+- Mark notifications as read
+- Open linked Incident Rooms
+
+The browser cannot:
+
+- Create private alert notifications
+- Trigger protected ingestion functions
+- Access ingestion secrets
+- Backfill historic notifications from newly created rules
+
+When multiple rules match the same incident, Sentinel Atlas coalesces those matches into one private notification to avoid duplicating the same event in the inbox.
+
+---
+
+## Application Areas
+
+| Area | Purpose |
+|---|---|
+| **Command Centre** | Hybrid operational overview of active incidents, source health, private alerts, and stored source-backed records |
+| **Global Map** | Real geospatial exploration of source-backed incidents and labelled prototype fixtures |
+| **Incident Rooms** | Incident-level detail, timeline context, source metadata, notification context, and watchlist relevance |
+| **My World** | Account-scoped saved locations, enabled alert rules, and private alert feed |
+| **Notification Centre** | Private in-app notifications created by the server-side evaluator |
+| **Daily Risk Briefing** | Client-side hybrid briefing assembled from incidents, alerts, watchlists, rules, and source health |
+| **Data Trust** | Source provenance, integrity labels, source operations, and private alert trust model |
+| **Settings** | Watchlist management, alert rules, in-app delivery status, and prototype preferences |
 
 ---
 
@@ -110,25 +149,30 @@ The application includes:
 flowchart LR
     A[React + TypeScript Frontend] --> B[Supabase Auth]
     A --> C[Supabase Postgres]
+    A --> D[Leaflet / React Leaflet Map]
 
-    D[pg_cron schedules] --> E[sentinel_internal.enqueue_ingestion_sync]
-    E --> F[pg_net protected POST]
-    F --> G[Supabase Edge Functions]
+    E[pg_cron schedules] --> F[sentinel_internal.enqueue_ingestion_sync]
+    F --> G[pg_net protected POST]
+    G --> H[Supabase Edge Functions]
 
-    H[Supabase Vault] --> E
+    I[Supabase Vault] --> F
 
-    G --> I[USGS Earthquake Catalog]
-    G --> J[GDACS]
-    G --> K[NASA EONET]
+    H --> J[USGS Earthquake Catalog]
+    H --> K[GDACS]
+    H --> L[NASA EONET]
 
-    G --> C
+    H --> C
 
-    C --> L[data_sources]
-    C --> M[ingestion_runs]
-    C --> N[source_events]
-    C --> O[incidents]
-    C --> P[incident_sources]
-    C --> Q[incident_updates]
+    C --> M[data_sources]
+    C --> N[ingestion_runs]
+    C --> O[source_events]
+    C --> P[incidents]
+    C --> Q[incident_sources]
+    C --> R[incident_updates]
+    C --> S[watchlists]
+    C --> T[watchlist_locations]
+    C --> U[alert_rules]
+    C --> V[notifications]
 ```
 
 ---
@@ -141,28 +185,30 @@ The interface uses source, integrity, and data-mode labels to distinguish betwee
 
 | Label | Meaning |
 |---|---|
-| **Source-backed / Verified** | Record stored through a connected source-ingestion workflow |
-| **Forecast** | Contextual or illustrative forecast-related information |
-| **Pending** | Reconciliation or operational follow-up state |
-| **Unavailable** | No suitable data is available for the field |
-| **Prototype Fixture** | Local demonstration data, clearly separated from live source records |
+| **Source-backed** | Record stored through a connected source-ingestion workflow |
+| **Verified** | Stored source observation or stable traceable record inside Sentinel Atlas |
+| **Forecast** | Forward-looking or contextual estimate |
+| **Pending** | Limited, incomplete, or reconciliation-pending metadata |
+| **Unavailable** | No suitable source-backed value is available for the field |
+| **Prototype Fixture** | Local demonstration data, clearly separated from source-backed records |
 
-When a provider is temporarily unavailable, Sentinel Atlas retains previously stored source-backed records while clearly displaying the degraded source state.
+Sentinel Atlas stores and displays provider observations, but it does not independently validate those observations or issue emergency instructions.
 
 ---
 
-## Application Areas
+## Trust and Safety Boundaries
 
-| Area | Purpose |
-|---|---|
-| **Command Centre** | Operational overview of active incidents, source health, and stored live-source records |
-| **Global Map** | Geographic exploration of active disruption records |
-| **My World** | Personal watchlists and location-focused context |
-| **Incident Rooms** | Incident-level detail, workflow context, status, and source information |
-| **Notification Centre** | Prototype alert rules linked to incidents and watched locations |
-| **Daily Risk Briefing** | Rule-based prototype briefing workflow |
-| **Data Trust** | Source provenance, integrity labels, and prototype transparency |
-| **Settings** | User preferences and workspace configuration |
+Sentinel Atlas is an informational intelligence platform. It is **not** an official emergency-warning system.
+
+The application is designed around several trust boundaries:
+
+- Source-backed records are labelled separately from prototype fixtures.
+- Private notifications are created server-side, not by browser code.
+- Ingestion functions are protected and token-gated.
+- Secrets are retrieved from Supabase Vault and are never exposed to the frontend.
+- Browser-visible source operations are sanitized summaries.
+- Raw provider errors, request headers, protected URLs, and secret-bearing details are not shown in the UI.
+- Degraded provider states are shown without exposing sensitive operational details.
 
 ---
 
@@ -175,6 +221,8 @@ When a provider is temporarily unavailable, Sentinel Atlas retains previously st
 - Vite
 - Tailwind CSS
 - React Router
+- Leaflet
+- React Leaflet
 - Lucide React
 
 ### Backend and Infrastructure
@@ -190,7 +238,7 @@ When a provider is temporarily unavailable, Sentinel Atlas retains previously st
 ### Deployment
 
 - Vercel for frontend production deployment
-- Supabase for database, authentication, Edge Functions, and scheduled ingestion
+- Supabase for database, authentication, Edge Functions, Vault, and scheduled ingestion
 
 ---
 
@@ -240,20 +288,10 @@ npm run dev
 
 ```bash
 npm run typecheck
+npm run lint
 npm run build
 git diff --check
 ```
-
----
-
-## Security Notes
-
-- Browser users access only public-safe application data through the Supabase client.
-- Protected ingestion functions use a custom ingestion token.
-- Scheduled refreshes retrieve protected values through Supabase Vault.
-- Scheduler helper routines are not intended for public browser use.
-- Raw provider errors, request headers, tokens, and secret-bearing URLs are not shown in the frontend.
-- Live-source status is communicated through safe user-facing operational messages.
 
 ---
 
@@ -265,14 +303,25 @@ Sentinel Atlas was built to demonstrate:
 - Live public API ingestion
 - Supabase Edge Function development
 - Secure scheduled automation
-- Database modelling and normalisation
+- Database modelling and normalization
+- Real geospatial incident mapping
 - Source provenance and transparency
+- Private in-app alert workflows
+- Row-level account-scoped data access
 - Operational dashboard UX
 - Authentication and protected workspace flow
 - Graceful handling of temporarily unavailable providers
 - Product thinking around trust, integrity labels, and prototype transparency
 
-The application is not an official emergency-warning system and does not independently validate provider observations.
+---
+
+## Limitations
+
+- Sentinel Atlas is not an official emergency-warning service.
+- Provider observations are stored and labelled, not independently verified by Sentinel Atlas.
+- Some scenario context remains prototype fixture data and is clearly labelled.
+- Private notifications are created only when newly changed active source-backed incidents match saved rules.
+- Creating a new alert rule does not backfill historic notifications.
 
 ---
 
