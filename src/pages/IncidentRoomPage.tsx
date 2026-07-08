@@ -22,19 +22,29 @@ import {
   getIncidentById,
   getRelatedIncidents,
   hazardTypeLabels,
-  mockWatchlist,
   mockSources,
 } from '../data/mockIncidents';
 import { buildHybridIncidentFromFixture, getHybridIncidentById } from '../lib/hybridIncidents';
 import type { HybridIncident } from '../types/hybridIntelligence';
-import type { IncidentTab, Incident, HazardType } from '../types';
+import type { IncidentTab, HazardType } from '../types';
 import { SeverityBadge, severityColor, severityText } from '../components/SeverityBadge';
 import { IntegrityBadge, StatusBadge } from '../components/StatusBadge';
 import { IncidentTimeline } from '../components/IncidentTimeline';
 import { IncidentCard } from '../components/IncidentCard';
 import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
 import { EmptyState } from '../components/ui';
+import { useAuth } from '../contexts/AuthContext';
 import { useNotifications } from '../contexts/NotificationContext';
+import { supabase } from '../lib/supabase';
+import {
+  fetchSavedWatchlistLocations,
+  type PersistedWatchlistLocation,
+} from '../lib/watchlists';
+import {
+  fetchSavedAlertRules,
+  type PersistedAlertRule,
+  type AlertRuleSeverity,
+} from '../lib/alertRules';
 
 const tabs: { value: IncidentTab; label: string }[] = [
   { value: 'overview', label: 'Overview' },
@@ -65,10 +75,117 @@ function formatTimestamp(iso: string): string {
 
 // ── Right-rail relevance helpers ────────────────────────────
 
-function findMatchingWatchlist(incident: Incident) {
-  return mockWatchlist.filter((loc) =>
-    loc.alertRules.includes(incident.hazardType)
-  );
+type WatchlistRelevanceState = 'signed_out' | 'loading' | 'ready' | 'error' | 'unconfigured';
+
+type RealWatchlistRelevanceMatch = {
+  ruleId: string;
+  ruleName: string;
+  minimumSeverity: AlertRuleSeverity;
+  hazardType: string | null;
+  locationId: string;
+  locationLabel: string;
+  placeName: string;
+  distanceKm: number;
+  effectiveRadiusKm: number;
+  locationScoped: boolean;
+};
+
+const severityRank: Record<AlertRuleSeverity, number> = {
+  advisory: 1,
+  elevated: 2,
+  high: 3,
+  critical: 4,
+};
+
+function radians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function distanceKmBetween(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number },
+): number {
+  const latDelta = radians(to.latitude - from.latitude);
+  const lonDelta = radians(to.longitude - from.longitude);
+  const fromLat = radians(from.latitude);
+  const toLat = radians(to.latitude);
+
+  const haversine =
+    Math.sin(latDelta / 2) ** 2 +
+    Math.cos(fromLat) * Math.cos(toLat) * Math.sin(lonDelta / 2) ** 2;
+
+  return 6371.0088 * 2 * Math.asin(Math.sqrt(Math.min(1, Math.max(0, haversine))));
+}
+
+function buildRealWatchlistRelevance(
+  incident: HybridIncident,
+  rules: PersistedAlertRule[],
+  locations: PersistedWatchlistLocation[],
+): RealWatchlistRelevanceMatch[] {
+  const incidentLatitude = incident.coordinates.lat;
+  const incidentLongitude = incident.coordinates.lng;
+
+  if (!Number.isFinite(incidentLatitude) || !Number.isFinite(incidentLongitude)) {
+    return [];
+  }
+
+  const matches: RealWatchlistRelevanceMatch[] = [];
+
+  for (const rule of rules) {
+    if (!rule.enabled) continue;
+    if (rule.hazard_type && rule.hazard_type !== incident.hazardType) continue;
+    if (severityRank[incident.severity] < severityRank[rule.minimum_severity]) continue;
+
+    const candidateLocations = locations.filter((location) => {
+      if (location.latitude === null || location.longitude === null) return false;
+
+      if (rule.watchlist_location_id) {
+        return location.id === rule.watchlist_location_id;
+      }
+
+      return rule.watchlist_id === null || location.watchlist_id === rule.watchlist_id;
+    });
+
+    let nearestMatch: RealWatchlistRelevanceMatch | null = null;
+
+    for (const location of candidateLocations) {
+      if (location.latitude === null || location.longitude === null) continue;
+
+      const effectiveRadiusKm = Math.min(
+        location.radius_km,
+        rule.maximum_distance_km ?? location.radius_km,
+      );
+      const distanceKm = distanceKmBetween(
+        { latitude: incidentLatitude, longitude: incidentLongitude },
+        { latitude: location.latitude, longitude: location.longitude },
+      );
+
+      if (distanceKm > effectiveRadiusKm) continue;
+
+      const match: RealWatchlistRelevanceMatch = {
+        ruleId: rule.id,
+        ruleName: rule.name,
+        minimumSeverity: rule.minimum_severity,
+        hazardType: rule.hazard_type,
+        locationId: location.id,
+        locationLabel: location.label,
+        placeName: location.place_name,
+        distanceKm,
+        effectiveRadiusKm,
+        locationScoped: Boolean(rule.watchlist_location_id),
+      };
+
+      if (!nearestMatch || match.distanceKm < nearestMatch.distanceKm) {
+        nearestMatch = match;
+      }
+    }
+
+    if (nearestMatch) {
+      matches.push(nearestMatch);
+    }
+  }
+
+  return matches.sort((a, b) => a.distanceKm - b.distanceKm || a.ruleName.localeCompare(b.ruleName));
 }
 
 function getSourceById(sourceId: string) {
@@ -340,8 +457,11 @@ function ContextCards({ incident }: { incident: HybridIncident }) {
 
 function IntelligenceRail({ incident }: { incident: HybridIncident }) {
   const related = useMemo(() => getRelatedIncidents(incident).map(buildHybridIncidentFromFixture), [incident]);
-  const matchingWatchlist = useMemo(() => findMatchingWatchlist(incident), [incident]);
+  const { isAuthenticated, isConfigured, loading: authLoading, user } = useAuth();
   const { notifications, markNotificationRead } = useNotifications();
+  const [watchlistRelevanceState, setWatchlistRelevanceState] = useState<WatchlistRelevanceState>('loading');
+  const [watchlistRelevanceError, setWatchlistRelevanceError] = useState<string | null>(null);
+  const [watchlistRelevanceMatches, setWatchlistRelevanceMatches] = useState<RealWatchlistRelevanceMatch[]>([]);
 
   const incidentNotifications = useMemo(
     () => notifications.filter((notification) => notification.incidentId === incident.id),
@@ -360,6 +480,66 @@ function IntelligenceRail({ incident }: { incident: HybridIncident }) {
       ),
     );
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWatchlistRelevance() {
+      if (authLoading) {
+        setWatchlistRelevanceState('loading');
+        return;
+      }
+
+      if (!isConfigured || !supabase) {
+        setWatchlistRelevanceMatches([]);
+        setWatchlistRelevanceError(null);
+        setWatchlistRelevanceState('unconfigured');
+        return;
+      }
+
+      if (!isAuthenticated || !user) {
+        setWatchlistRelevanceMatches([]);
+        setWatchlistRelevanceError(null);
+        setWatchlistRelevanceState('signed_out');
+        return;
+      }
+
+      setWatchlistRelevanceState('loading');
+      setWatchlistRelevanceError(null);
+
+      try {
+        const [locations, rules] = await Promise.all([
+          fetchSavedWatchlistLocations(supabase, user.id),
+          fetchSavedAlertRules(supabase, user.id),
+        ]);
+
+        if (cancelled) return;
+
+        setWatchlistRelevanceMatches(
+          buildRealWatchlistRelevance(incident, rules, locations),
+        );
+        setWatchlistRelevanceState('ready');
+      } catch {
+        if (cancelled) return;
+
+        setWatchlistRelevanceMatches([]);
+        setWatchlistRelevanceError('Saved watchlist relevance could not be loaded.');
+        setWatchlistRelevanceState('error');
+      }
+    }
+
+    void loadWatchlistRelevance();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authLoading,
+    incident,
+    isAuthenticated,
+    isConfigured,
+    user,
+  ]);
 
   return (
     <div className="space-y-4">
@@ -491,28 +671,58 @@ function IntelligenceRail({ incident }: { incident: HybridIncident }) {
 
       {/* Watched-location relevance */}
       <div className="panel p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
+        <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
           Watchlist Relevance
         </h3>
-        {matchingWatchlist.length === 0 ? (
+
+        {watchlistRelevanceState === 'loading' ? (
           <p className="text-xs text-slate-500">
-            This incident does not match any watched-location alert rules in the prototype.
+            Checking this incident against your saved locations and alert rules...
+          </p>
+        ) : watchlistRelevanceState === 'signed_out' ? (
+          <p className="text-xs leading-relaxed text-slate-500">
+            Sign in to see private saved-location relevance for this incident.
+          </p>
+        ) : watchlistRelevanceState === 'unconfigured' ? (
+          <p className="text-xs leading-relaxed text-slate-500">
+            Supabase is not configured in this browser build, so personal relevance is unavailable.
+          </p>
+        ) : watchlistRelevanceState === 'error' ? (
+          <p className="text-xs leading-relaxed text-warning-300">
+            {watchlistRelevanceError ?? 'Saved watchlist relevance could not be loaded.'}
+          </p>
+        ) : watchlistRelevanceMatches.length === 0 ? (
+          <p className="text-xs leading-relaxed text-slate-500">
+            This incident does not currently match any enabled saved alert rule for this account.
+            This panel uses real saved locations and rules, not prototype fixture matches.
           </p>
         ) : (
           <div className="space-y-2">
-            {matchingWatchlist.map((loc) => (
-              <div key={loc.id} className="flex items-center gap-2 rounded-lg border border-ink-700/60 bg-ink-850/40 p-2.5">
-                <Ruler className="h-3 w-3 text-cyan-400" />
+            {watchlistRelevanceMatches.map((match) => (
+              <div
+                key={`${match.ruleId}-${match.locationId}`}
+                className="flex items-start gap-2 rounded-lg border border-cyan-500/15 bg-cyan-500/5 p-2.5"
+              >
+                <Ruler className="mt-0.5 h-3 w-3 flex-shrink-0 text-cyan-400" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-slate-200">{loc.name}</p>
-                  <p className="text-[10px] text-slate-500">
-                    Matches {hazardTypeLabels[incident.hazardType]} rule
+                  <p className="text-xs font-medium text-slate-200">
+                    {match.locationLabel}
+                  </p>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
+                    Rule "{match.ruleName}" matches {Math.round(match.distanceKm).toLocaleString()} km away
+                    within a {Math.round(match.effectiveRadiusKm).toLocaleString()} km boundary.
+                  </p>
+                  <p className="mt-1 text-[10px] leading-relaxed text-slate-600">
+                    {match.locationScoped ? 'Single-location rule' : 'All-location rule'} ·{' '}
+                    {match.hazardType ? hazardTypeLabels[match.hazardType as HazardType] ?? match.hazardType : 'All hazards'} ·{' '}
+                    {match.minimumSeverity} or higher
                   </p>
                 </div>
               </div>
             ))}
-            <p className="text-[10px] text-slate-600 leading-relaxed">
-              Relevance is calculated from local prototype fixture rules. It is not a live proximity calculation.
+            <p className="text-[10px] leading-relaxed text-slate-600">
+              Relevance is calculated from this account's saved locations and enabled alert rules.
+              Official warnings are not inferred from this proximity check.
             </p>
           </div>
         )}
