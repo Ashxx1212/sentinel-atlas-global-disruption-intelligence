@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft,
+  CheckCheck,
   Clock,
   MapPin,
   Database,
@@ -33,6 +34,7 @@ import { IncidentTimeline } from '../components/IncidentTimeline';
 import { IncidentCard } from '../components/IncidentCard';
 import { DataIntegrityPanel } from '../components/DataIntegrityPanel';
 import { EmptyState } from '../components/ui';
+import { useNotifications } from '../contexts/NotificationContext';
 
 const tabs: { value: IncidentTab; label: string }[] = [
   { value: 'overview', label: 'Overview' },
@@ -339,6 +341,25 @@ function ContextCards({ incident }: { incident: HybridIncident }) {
 function IntelligenceRail({ incident }: { incident: HybridIncident }) {
   const related = useMemo(() => getRelatedIncidents(incident).map(buildHybridIncidentFromFixture), [incident]);
   const matchingWatchlist = useMemo(() => findMatchingWatchlist(incident), [incident]);
+  const { notifications, markNotificationRead } = useNotifications();
+
+  const incidentNotifications = useMemo(
+    () => notifications.filter((notification) => notification.incidentId === incident.id),
+    [incident.id, notifications],
+  );
+
+  const unreadIncidentNotifications = useMemo(
+    () => incidentNotifications.filter((notification) => !notification.readAt),
+    [incidentNotifications],
+  );
+
+  const markIncidentNotificationsRead = async () => {
+    await Promise.all(
+      unreadIncidentNotifications.map((notification) =>
+        markNotificationRead(notification.id),
+      ),
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -387,24 +408,83 @@ function IntelligenceRail({ incident }: { incident: HybridIncident }) {
 
         <div className="flex items-start gap-2.5">
           <Bell className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-cyan-400" />
-          <div>
-            <p className="text-xs font-medium text-slate-200">
-              Private notification inbox
-            </p>
+          <div className="min-w-0 flex-1">
+            {incidentNotifications.length > 0 ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs font-medium text-slate-200">
+                    Private alert match
+                  </p>
+                  <span className="rounded-full border border-cyan-500/25 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-medium text-cyan-300">
+                    {incidentNotifications.length} notification{incidentNotifications.length === 1 ? '' : 's'}
+                  </span>
+                  {unreadIncidentNotifications.length > 0 ? (
+                    <span className="rounded-full border border-warning-500/25 bg-warning-500/10 px-2 py-0.5 text-[10px] font-medium text-warning-300">
+                      {unreadIncidentNotifications.length} unread
+                    </span>
+                  ) : null}
+                </div>
 
-            <p className="mt-1 text-xs leading-relaxed text-slate-500">
-              Notifications for this incident appear only when a server-side alert
-              evaluator creates a private record for a signed-in account. This Incident
-              Room does not infer or fabricate alert matches.
-            </p>
+                <div className="mt-2 space-y-2">
+                  {incidentNotifications.map((notification) => (
+                    <div
+                      key={notification.id}
+                      className="rounded-lg border border-cyan-500/15 bg-cyan-500/5 px-3 py-2"
+                    >
+                      <p className="text-xs font-medium text-slate-200">
+                        {notification.title}
+                      </p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                        {notification.matchingReason ?? notification.body ?? 'Server-side evaluator created this private alert.'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
 
-            <Link
-              to="/alerts"
-              className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200"
-            >
-              Open Notification Centre
-              <ArrowLeft className="h-3 w-3 rotate-180" />
-            </Link>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  {unreadIncidentNotifications.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void markIncidentNotificationsRead();
+                      }}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+                    >
+                      <CheckCheck className="h-3 w-3" />
+                      Mark incident alert read
+                    </button>
+                  ) : null}
+
+                  <Link
+                    to="/alerts"
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+                  >
+                    Open Notification Centre
+                    <ArrowLeft className="h-3 w-3 rotate-180" />
+                  </Link>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-medium text-slate-200">
+                  No private alert for this incident
+                </p>
+
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  This signed-in account has no notification record for this incident.
+                  Server-side matching creates alerts only when a source-backed incident
+                  matches your saved rules.
+                </p>
+
+                <Link
+                  to="/alerts"
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-cyan-300 transition-colors hover:text-cyan-200"
+                >
+                  Open Notification Centre
+                  <ArrowLeft className="h-3 w-3 rotate-180" />
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </div>
