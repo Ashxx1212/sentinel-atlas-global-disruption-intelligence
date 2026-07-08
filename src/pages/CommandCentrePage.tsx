@@ -354,7 +354,7 @@ const sourceHealthSublabel = useMemo(() => {
               </div>
             ))}
             <span className="text-xs text-slate-600">·</span>
-            <span className="text-xs text-slate-600">Illustrative map · Live source records + prototype fixtures</span>
+            <span className="text-xs text-slate-600">Real basemap · Live source records + prototype fixtures</span>
           </div>
         </div>
 

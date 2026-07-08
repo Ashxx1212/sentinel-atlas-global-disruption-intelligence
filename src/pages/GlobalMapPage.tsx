@@ -217,7 +217,7 @@ export function GlobalMapPage() {
             className="h-[400px] sm:h-[500px] lg:h-[600px]"
           />
           <p className="mt-2 text-xs text-slate-500">
-            Live source positions are plotted from stored source coordinates. Map styling remains illustrative.
+            Markers are plotted on a real basemap using stored latitude and longitude. Prototype fixtures remain clearly labeled.
           </p>
 
           {selectedIncident ? (

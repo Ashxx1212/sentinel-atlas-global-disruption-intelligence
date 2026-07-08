@@ -158,7 +158,7 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
                   <p className="mt-0.5 text-[11px] text-slate-500 leading-relaxed">
                     {incident.dataMode === 'live_source'
                       ? `${incident.sourceName} source-backed event metadata. Sentinel Atlas has not independently validated this source observation.`
-                      : 'This incident appears because it matches the current map filters. Map position and incident context are illustrative in this prototype.'}
+                      : 'This prototype fixture appears because it matches the current map filters. Incident context is illustrative and clearly labeled.'}
                   </p>
                 </div>
               </div>
@@ -177,7 +177,7 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
                   </div>
                 </div>
                 <div className="absolute bottom-1.5 left-2 font-mono text-[9px] text-slate-600">
-                  MOCK MAP
+                  LOCATION PREVIEW
                 </div>
               </div>
             </div>
@@ -212,8 +212,8 @@ export function IncidentDrawer({ incident, onClose }: IncidentDrawerProps) {
             <div className="mt-4 rounded-lg border border-warning-500/15 bg-warning-500/5 p-3">
               <p className="text-[11px] text-slate-500 leading-relaxed">
                 {incident.dataMode === 'live_source'
-                  ? 'Source-backed positions are plotted from stored source coordinates. Map styling remains illustrative.'
-                  : 'Map position and incident context are illustrative for prototype fixtures.'}
+                  ? 'Source-backed positions use stored source coordinates. Open the Global Map for the full geospatial basemap.'
+                  : 'Prototype fixture context is illustrative and clearly labeled. Open the Global Map for the full geospatial basemap.'}
               </p>
             </div>
           </div>
