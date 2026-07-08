@@ -6,8 +6,11 @@ import {
   Bell,
   CheckCheck,
   CheckCircle2,
+  Heart,
   Inbox,
+  Lock,
   RefreshCw,
+  Settings,
 } from 'lucide-react';
 import type { Severity } from '../types';
 import { AuthGate } from '../components/AuthGate';
@@ -65,7 +68,7 @@ export function AlertsPage() {
   return (
     <AuthGate
       title="Notification Centre"
-      description="Sign in to view your private in-app notifications and manage their read state."
+      description="Sign in to view private in-app notifications created by the server-side alert evaluator."
     >
       <AuthenticatedAlertsPage />
     </AuthGate>
@@ -120,6 +123,22 @@ function AuthenticatedAlertsPage() {
     }
   }, [activeTab, notifications]);
 
+  const highPriorityCount = useMemo(
+    () =>
+      notifications.filter(
+        (notification) =>
+          notification.severity === 'critical' || notification.severity === 'high',
+      ).length,
+    [notifications],
+  );
+
+  const liveSourceNotificationCount = useMemo(
+    () =>
+      notifications.filter((notification) => notification.dataMode === 'live_source')
+        .length,
+    [notifications],
+  );
+
   const markAsReadAndToast = async (id: string) => {
     const completed = await markNotificationRead(id);
     showToast(
@@ -142,20 +161,70 @@ function AuthenticatedAlertsPage() {
     <div className="mx-auto max-w-4xl px-4 py-6 lg:px-6 lg:py-8">
       <PageHeader
         title="Notification Centre"
-        subtitle="Private in-app notifications for this account. Notification creation remains a server-side responsibility."
+        subtitle="Private in-app notifications for this account. Alerts are created by the server-side evaluator, not by browser code."
       >
-        <button
-          type="button"
-          onClick={() => {
-            void refreshNotifications();
-          }}
-          disabled={state === 'loading'}
-          className="btn-secondary px-3 py-2 text-xs"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${state === 'loading' ? 'animate-spin' : ''}`} />
-          {state === 'loading' ? 'Loading...' : 'Refresh inbox'}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <Link to="/settings" className="btn-secondary px-3 py-2 text-xs">
+            <Settings className="h-3.5 w-3.5" />
+            Alert settings
+          </Link>
+          <button
+            type="button"
+            onClick={() => {
+              void refreshNotifications();
+            }}
+            disabled={state === 'loading'}
+            className="btn-secondary px-3 py-2 text-xs"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${state === 'loading' ? 'animate-spin' : ''}`} />
+            {state === 'loading' ? 'Loading...' : 'Refresh inbox'}
+          </button>
+        </div>
       </PageHeader>
+
+      <div className="mb-6 grid gap-3 sm:grid-cols-4">
+        <div className="panel p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Unread
+          </p>
+          <p className="mt-2 font-mono text-2xl font-bold text-cyan-300">
+            {unreadCount}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">Needs review</p>
+        </div>
+
+        <div className="panel p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Total
+          </p>
+          <p className="mt-2 font-mono text-2xl font-bold text-cyan-300">
+            {notifications.length}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">Private inbox rows</p>
+        </div>
+
+        <div className="panel p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Priority
+          </p>
+          <p className="mt-2 font-mono text-2xl font-bold text-cyan-300">
+            {highPriorityCount}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">High or critical</p>
+        </div>
+
+        <div className="panel p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Delivery
+          </p>
+          <p className="mt-2 text-sm font-semibold text-cyan-300">
+            In-app only
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            {liveSourceNotificationCount} source-backed
+          </p>
+        </div>
+      </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
@@ -174,18 +243,28 @@ function AuthenticatedAlertsPage() {
           </span>
         </div>
 
-        {unreadCount > 0 ? (
-          <button
-            type="button"
-            onClick={() => {
-              void markAllRead();
-            }}
-            className="flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-cyan-300"
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            to="/my-world"
+            className="inline-flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-cyan-300"
           >
-            <CheckCheck className="h-3.5 w-3.5" />
-            Mark all read
-          </button>
-        ) : null}
+            <Heart className="h-3.5 w-3.5" />
+            My World
+          </Link>
+
+          {unreadCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                void markAllRead();
+              }}
+              className="flex items-center gap-1.5 text-xs text-slate-400 transition-colors hover:text-cyan-300"
+            >
+              <CheckCheck className="h-3.5 w-3.5" />
+              Mark all read
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="mb-4 border-b border-ink-700/60">
@@ -272,22 +351,34 @@ function AuthenticatedAlertsPage() {
 
       <div className="mt-6 panel border-l-2 border-l-cyan-500/30 p-4">
         <div className="flex items-start gap-3">
-          <AlertOctagon className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-400" />
+          <Lock className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-400" />
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-semibold text-slate-200">
                 How this inbox works
               </h3>
               <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide text-cyan-300">
-                Private notification store
+                Private in-app only
               </span>
             </div>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
               This page reads notifications belonging only to the signed-in account.
               You can mark notifications read and open the related Incident Room, but
-              browser code never creates notifications. Source-backed incident matching
-              runs through the server-side evaluator.
+              browser code never creates notifications. Source-backed matching runs
+              through the server-side evaluator. When multiple rules match the same
+              incident, the evaluator coalesces those matches into one private notification
+              so the inbox does not become a tiny bureaucratic swamp.
             </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link to="/settings" className="btn-secondary text-xs">
+                <Settings className="h-3.5 w-3.5" />
+                Manage rules
+              </Link>
+              <Link to="/my-world" className="btn-secondary text-xs">
+                <Heart className="h-3.5 w-3.5" />
+                Review My World
+              </Link>
+            </div>
           </div>
         </div>
       </div>
