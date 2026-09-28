@@ -267,9 +267,37 @@ export function IncidentMapWorkspace({
 
   return (
     <div
-      className={`relative z-0 isolate overflow-hidden rounded-xl border border-ink-700/60 bg-ink-950 ${className}`}
+      className={`sentinel-map-workspace relative z-0 isolate overflow-hidden rounded-xl border border-ink-700/60 bg-ink-950 ${className}`}
       aria-label="Interactive world map with source-backed incident markers"
     >
+      <style>
+        {`
+          .sentinel-map-workspace .leaflet-tile {
+            filter: invert(1) hue-rotate(180deg) brightness(0.52) contrast(0.92) saturate(0.55);
+          }
+
+          .sentinel-map-workspace .leaflet-control-zoom a {
+            background: rgba(15, 23, 42, 0.92);
+            border-color: rgba(51, 65, 85, 0.9);
+            color: #e2e8f0;
+          }
+
+          .sentinel-map-workspace .leaflet-control-zoom a:hover {
+            background: rgba(30, 41, 59, 0.96);
+            color: #67e8f9;
+          }
+
+          .sentinel-map-workspace .leaflet-control-attribution {
+            background: rgba(15, 23, 42, 0.78);
+            color: #94a3b8;
+          }
+
+          .sentinel-map-workspace .leaflet-control-attribution a {
+            color: #67e8f9;
+          }
+        `}
+      </style>
+
       <MapContainer
         center={[20, 0]}
         zoom={2}
@@ -289,8 +317,8 @@ export function IncidentMapWorkspace({
         worldCopyJump
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
         <FitMapToIncidents incidents={validIncidents} selectedId={selectedId} />
@@ -308,7 +336,7 @@ export function IncidentMapWorkspace({
       </MapContainer>
 
       <div className="pointer-events-none absolute left-16 top-3 z-[10] rounded-full border border-cyan-500/25 bg-ink-950/85 px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-cyan-300 shadow-lg backdrop-blur">
-        Dark geospatial basemap · {validIncidents.length} plotted
+        OpenStreetMap basemap · {validIncidents.length} plotted
       </div>
 
       {skippedCount > 0 ? (
